@@ -2,8 +2,8 @@
 //!
 //! Proves nullifier integrity, spend authority, and diversified address integrity
 //! for a single note:
-//! - Given private witness data `(nk, rho_old, psi_old, cm_old)`, derives
-//!   `nf_old` in-circuit and constrains it to match the public input.
+//! - Given private witness data `(nk, rho_signed, psi_signed, cm_signed)`, derives
+//!   `nf_signed` in-circuit and constrains it to match the public input.
 //! - Given private witness data `(ak, alpha)`, derives `rk = [alpha] * SpendAuthG + ak`
 //!   and constrains it to match the public input. This links the ZKP to the
 //!   keystone signature verified out-of-circuit.
@@ -26,8 +26,9 @@ use crate::{
         commit_ivk::{CommitIvkChip, CommitIvkConfig},
         gadget::{
             add_chip::{AddChip, AddConfig},
-            assign_free_advice, commit_ivk, derive_nullifier,
+            assign_free_advice, commit_ivk, derive_nullifier, note_commit,
         },
+        note_commit::{NoteCommitChip, NoteCommitConfig},
     },
     constants::{OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains},
     keys::{
@@ -35,12 +36,13 @@ use crate::{
         Scope, SpendValidatingKey,
     },
     note::{
-        commitment::NoteCommitment,
+        commitment::{NoteCommitTrapdoor, NoteCommitment},
         nullifier::Nullifier,
         Note,
     },
     primitives::redpallas::{SpendAuth, VerificationKey},
     spec::NonIdentityPallasPoint,
+    value::NoteValue,
 };
 use halo2_gadgets::{
     ecc::{
@@ -53,18 +55,25 @@ use halo2_gadgets::{
 };
 
 /// Public input offset for the derived nullifier.
-const NF_OLD: usize = 0;
+const NF_SIGNED: usize = 0;
 /// Public input offset for rk (x-coordinate).
 const RK_X: usize = 1;
 /// Public input offset for rk (y-coordinate).
 const RK_Y: usize = 2;
 
-/// Size of the delegation circuit.
-/// 4096 rows
-/// Sinsemilla lookup table ~1024 rows
-/// ECC chip ~1000 rows
-/// Poseidon chip ~200-300 rows
-/// Range checks a few more rows but relatively negligible.
+/// Size of the delegation circuit (2^K rows).
+///
+/// Current usage fits within K=11 (2048 rows) but K=12 (4096 rows)
+/// is chosen to leave headroom for future conditions (Merkle path,
+/// SMT non-membership, governance nullifiers).
+///
+/// Row budget breakdown:
+/// - Sinsemilla lookup table: ~1024 rows (loaded once, shared)
+/// - NoteCommit (Sinsemilla hash + decomposition/canonicity + rcm scalar mul): ~950-1150 rows
+/// - Nullifier derivation (Poseidon + ECC): ~400 rows
+/// - Spend authority (fixed-base scalar mul + point add): ~260 rows
+/// - CommitIvk (Sinsemilla short commit + decomposition): ~200 rows
+/// - Address integrity (variable-base scalar mul): ~260 rows
 const K: u32 = 12;
 
 /// Configuration for the Delegation circuit.
@@ -84,7 +93,7 @@ pub struct Config {
     add_config: AddConfig,
     // Configuration for the ECCChip which provides elliptic curve operations
     // (point addition, scalar multiplication) on the Pallas curve with Orchard's fixes bases.
-    // We use it to convert cm_old from NoteCommitment to a Field point for the DeriveNullifier function.
+    // We use it to convert cm_signed from NoteCommitment to a Field point for the DeriveNullifier function.
     ecc_config: EccConfig<OrchardFixedBases>,
     // Poseidon chip config. Used in the DeriveNullifier.
     poseidon_config: PoseidonConfig<pallas::Base, 3, 2>,
@@ -93,6 +102,8 @@ pub struct Config {
     sinsemilla_config: SinsemillaConfig<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases>,
     // Configuration to handle decomposition and canonicity checking for CommitIvk.
     commit_ivk_config: CommitIvkConfig,
+    // Configuration for decomposition and canonicity checking for NoteCommit.
+    note_commit_config: NoteCommitConfig,
 }
 
 impl Config {
@@ -121,24 +132,29 @@ impl Config {
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config.clone())
     }
+
+    fn note_commit_chip(&self) -> NoteCommitChip {
+        NoteCommitChip::construct(self.note_commit_config.clone())
+    }
 }
 
 /// The Delegation circuit.
 ///
 /// Proves nullifier integrity, spend authority, and diversified address integrity:
-/// - The prover knows `(nk, rho, psi, cm)` such that `nf_old = DeriveNullifier(nk, rho, psi, cm)`.
+/// - The prover knows `(nk, rho, psi, cm)` such that `nf_signed = DeriveNullifier(nk, rho, psi, cm)`.
 /// - The prover knows `(ak, alpha)` such that `rk = [alpha] * SpendAuthG + ak`.
 /// - The prover knows `(ak, nk, rivk, g_d_signed, pk_d_signed)` such that
 ///   `pk_d_signed = [CommitIvk_rivk(ExtractP(ak), nk)] * g_d_signed`.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     nk: Value<NullifierDerivingKey>,
-    rho_old: Value<pallas::Base>,
-    psi_old: Value<pallas::Base>,
-    cm_old: Value<NoteCommitment>,
+    rho_signed: Value<pallas::Base>,
+    psi_signed: Value<pallas::Base>,
+    cm_signed: Value<NoteCommitment>,
     ak: Value<SpendValidatingKey>,
     alpha: Value<pallas::Scalar>,
     rivk: Value<CommitIvkRandomness>,
+    rcm_signed: Value<NoteCommitTrapdoor>,
     g_d_signed: Value<NonIdentityPallasPoint>,
     pk_d_signed: Value<DiversifiedTransmissionKey>,
 }
@@ -147,16 +163,18 @@ impl Circuit {
     /// Constructs a `Circuit` from a note, its full viewing key, and the spend auth randomizer.
     pub fn from_note_unchecked(fvk: &FullViewingKey, note: &Note, alpha: pallas::Scalar) -> Self {
         let sender_address = note.recipient();
-        let rho_old = note.rho();
-        let psi_old = note.rseed().psi(&rho_old);
+        let rho_signed = note.rho();
+        let psi_signed = note.rseed().psi(&rho_signed);
+        let rcm_signed = note.rseed().rcm(&rho_signed);
         Circuit {
             nk: Value::known(*fvk.nk()),
-            rho_old: Value::known(rho_old.0),
-            psi_old: Value::known(psi_old),
-            cm_old: Value::known(note.commitment()),
+            rho_signed: Value::known(rho_signed.0),
+            psi_signed: Value::known(psi_signed),
+            cm_signed: Value::known(note.commitment()),
             ak: Value::known(fvk.clone().into()),
             alpha: Value::known(alpha),
             rivk: Value::known(fvk.rivk(Scope::External)),
+            rcm_signed: Value::known(rcm_signed),
             g_d_signed: Value::known(sender_address.g_d()),
             pk_d_signed: Value::known(*sender_address.pk_d()),
         }
@@ -254,6 +272,10 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Configuration to handle decomposition and canonicity checking for CommitIvk.
         let commit_ivk_config = CommitIvkChip::configure(meta, advices);
 
+        // Configuration for decomposition and canonicity checking for NoteCommit.
+        let note_commit_config =
+            NoteCommitChip::configure(meta, advices, sinsemilla_config.clone());
+
         Config {
             primary,
             advices,
@@ -262,6 +284,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             poseidon_config,
             sinsemilla_config,
             commit_ivk_config,
+            note_commit_config,
         }
     }
 
@@ -275,7 +298,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         SinsemillaChip::load(config.sinsemilla_config.clone(), &mut layouter)?;
 
         // Construct the ECC chip.
-        // It is needed to derive cm_old ECC point from NoteCommitment.
+        // It is needed to derive cm_signed ECC point from NoteCommitment.
         let ecc_chip = config.ecc_chip();
 
         // Witness ak_P (spend validating key) as a non-identity curve point.
@@ -306,7 +329,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             self.nk.map(|nk| nk.inner()),
         )?;
 
-        // Witness rho_old.
+        // Witness rho_signed.
         // This is the nullifier of the note that was spent to create this note. It is
         // a Nullifier type (a Pallas base field element) that serves as a unique, per-note domain
         // separator.
@@ -316,13 +339,13 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // spend input note so it chains each note to its creation context. A single tx
         // can create multiple output notes from the same input. All those outputs share the same
         // rho. If nullifier derivation only used rho (no psi), outputs from the same input could collide.
-        let rho_old = assign_free_advice(
-            layouter.namespace(|| "witness rho_old"),
+        let rho_signed = assign_free_advice(
+            layouter.namespace(|| "witness rho_signed"),
             config.advices[0],
-            self.rho_old,
+            self.rho_signed,
         )?;
 
-        // Witness psi_old.
+        // Witness psi_signed.
         // Pseudorandom field element derived from the note's random
         // seed rseed and its nullifier domain separator rho.
         // It adds randomness to the nullifier so that even if two notes share the same
@@ -337,35 +360,35 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Additionally, there is a structural reason, if we only used psi, there would be an implicit chain:
         // each note's identity is linked to the note that was spend to create it. The randomized psi
         // breaks the chain, unblocking a requirement used in Orchard's security proof.
-        let psi_old = assign_free_advice(
-            layouter.namespace(|| "witness psi_old"),
+        let psi_signed = assign_free_advice(
+            layouter.namespace(|| "witness psi_signed"),
             config.advices[0],
-            self.psi_old,
+            self.psi_signed,
         )?;
 
-        // Witness cm_old as an ECC point, which is the form DeriveNullifier expects.
-        let cm_old = Point::new(
+        // Witness cm_signed as an ECC point, which is the form DeriveNullifier expects.
+        let cm_signed = Point::new(
             ecc_chip.clone(),
-            layouter.namespace(|| "witness cm_old"),
-            self.cm_old.as_ref().map(|cm| cm.inner().to_affine()),
+            layouter.namespace(|| "witness cm_signed"),
+            self.cm_signed.as_ref().map(|cm| cm.inner().to_affine()),
         )?;
 
-        // Nullifier integrity: derive nf_old = DeriveNullifier(nk, rho_old, psi_old, cm_old).
-        let nf_old = derive_nullifier(
-            layouter.namespace(|| "nf_old = DeriveNullifier_nk(rho_old, psi_old, cm_old)"),
+        // Nullifier integrity: derive nf_signed = DeriveNullifier(nk, rho_signed, psi_signed, cm_signed).
+        let nf_signed = derive_nullifier(
+            layouter.namespace(|| "nf_signed = DeriveNullifier_nk(rho_signed, psi_signed, cm_signed)"),
             config.poseidon_chip(),
             config.add_chip(),
             ecc_chip.clone(),
-            rho_old,
-            &psi_old,
-            &cm_old,
+            rho_signed.clone(), // clone so rho_signed remains available for note_commit
+            &psi_signed,
+            &cm_signed,
             nk.clone(), // clone so nk remains available for commit_ivk
         )?;
 
-        // Constrain nf_old to equal the public input.
+        // Constrain nf_signed to equal the public input.
         // Enforce that the nullifier computed inside the circuit matches the nullifier provided
-        // as a public input from outside the circuit (supplied at NF_OLD of the public input)
-        layouter.constrain_instance(nf_old.inner().cell(), config.primary, NF_OLD)?;
+        // as a public input from outside the circuit (supplied at NF_SIGNED of the public input)
+        layouter.constrain_instance(nf_signed.inner().cell(), config.primary, NF_SIGNED)?;
 
         // Spend authority
         // Proves that the public rk is a valid rerandomization of the prover's ak.
@@ -403,7 +426,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // The ⊥ case is handled internally by CommitDomain::short_commit:
         // incomplete addition allows ⊥ to occur, and synthesis detects
         // these edge cases and aborts proof creation.
-        {
+        let pk_d_signed = {
             let ivk = {
                 // ExtractP(ak_P) -- extract the x-coordinate from the curve point
                 let ak = ak_P.extract_p().inner().clone();
@@ -444,6 +467,47 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
             derived_pk_d_signed
                 .constrain_equal(layouter.namespace(|| "pk_d_signed equality"), &pk_d_signed)?;
+
+            pk_d_signed
+        };
+
+        // signed note commitment integrity.
+        // NoteCommit_rcm_signed(repr(g_d_signed), repr(pk_d_signed), 0,
+        //                        rho_signed, psi_signed) = cm_signed
+        // No null option: the signed note must have a valid commitment.
+        {
+            let rcm_signed = ScalarFixed::new(
+                ecc_chip.clone(),
+                layouter.namespace(|| "rcm_signed"),
+                self.rcm_signed.as_ref().map(|rcm| rcm.inner()),
+            )?;
+
+            // The signed note's value is always 0.
+            let v_signed = assign_free_advice(
+                layouter.namespace(|| "v_signed = 0"),
+                config.advices[0],
+                Value::known(NoteValue::zero()),
+            )?;
+
+            // Compute NoteCommit from witness data.
+            let derived_cm_signed = note_commit(
+                layouter.namespace(|| "NoteCommit_rcm_signed(g_d, pk_d, 0, rho, psi)"),
+                config.sinsemilla_chip(),
+                config.ecc_chip(),
+                config.note_commit_chip(),
+                g_d_signed.inner(),
+                pk_d_signed.inner(),
+                v_signed,
+                rho_signed,
+                psi_signed,
+                rcm_signed,
+            )?;
+
+            // Strict equality — no null/bottom option.
+            derived_cm_signed.constrain_equal(
+                layouter.namespace(|| "cm_signed integrity"),
+                &cm_signed,
+            )?;
         }
 
         Ok(())
@@ -454,15 +518,15 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 #[derive(Clone, Debug)]
 pub struct Instance {
     /// The derived nullifier (temporary public input; will be replaced by gov_null).
-    pub nf_old: Nullifier,
+    pub nf_signed: Nullifier,
     /// The randomized spend validating key, used for signature verification out-of-circuit.
     pub rk: VerificationKey<SpendAuth>,
 }
 
 impl Instance {
     /// Constructs an [`Instance`] from its constituent parts.
-    pub fn from_parts(nf_old: Nullifier, rk: VerificationKey<SpendAuth>) -> Self {
-        Instance { nf_old, rk }
+    pub fn from_parts(nf_signed: Nullifier, rk: VerificationKey<SpendAuth>) -> Self {
+        Instance { nf_signed, rk }
     }
 
     /// Returns the public inputs as a vector of field elements for halo2.
@@ -473,7 +537,7 @@ impl Instance {
             .coordinates()
             .unwrap();
 
-        vec![self.nf_old.0, *rk.x(), *rk.y()]
+        vec![self.nf_signed.0, *rk.x(), *rk.y()]
     }
 }
 
@@ -652,4 +716,56 @@ mod tests {
         let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
         assert!(prover.verify().is_err());
     }
+
+    #[test]
+    fn note_commit_integrity_happy_path() {
+        let (circuit, nf, rk) = make_test_note();
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+
+    #[test]
+    fn note_commit_integrity_wrong_rcm() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace rcm_signed with a different note's rcm (wrong trapdoor)
+        let (_sk2, _fvk2, note2) = Note::dummy(&mut rng, None);
+        let rho2 = note2.rho();
+        let wrong_rcm = note2.rseed().rcm(&rho2);
+        circuit.rcm_signed = Value::known(wrong_rcm);
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn note_commit_integrity_wrong_cm() {
+        let mut rng = OsRng;
+        let (_sk1, fvk1, note1) = Note::dummy(&mut rng, None);
+        let (_sk2, _fvk2, note2) = Note::dummy(&mut rng, None);
+
+        // Build circuit from note1 but use note2's commitment
+        let nf = note1.nullifier(&fvk1);
+        let ak: SpendValidatingKey = fvk1.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk1, &note1, alpha);
+        circuit.cm_signed = Value::known(note2.commitment());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
 }
