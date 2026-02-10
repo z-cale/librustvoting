@@ -258,6 +258,55 @@ pub(crate) fn rho_binding_hash(
         .hash([cmx_1, cmx_2, cmx_3, cmx_4, gov_comm, vote_round_id])
 }
 
+/// Maximum proposal authority — full 16-bit bitmask (`2^16 - 1 = 65535`).
+///
+/// Each bit authorizes voting on the corresponding proposal (proposal ID =
+/// bit index from LSB).  This constant is the default for a fresh delegation
+/// and is hashed into `gov_comm` as a fixed 6th Poseidon input.
+pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535;
+
+/// Governance commitment hash for the delegation circuit (condition 7).
+///
+/// ```text
+/// gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
+///                     gov_comm_rand, MAX_PROPOSAL_AUTHORITY)
+/// ```
+///
+/// Binds the governance commitment to the output note's voting hotkey address,
+/// the total voting weight, the vote round, a blinding factor, and the
+/// proposal authority bitmask.
+///
+/// # Parameter layout — `ConstantLength<6>`
+///
+/// The spec defines 5 semantic fields: `(vpk, v_total, vote_round_id,
+/// MAX_PROPOSAL_AUTHORITY, gov_comm_rand)`.  Because `vpk` is a diversified
+/// address tuple represented as two x-coordinates, the Poseidon input
+/// naturally expands to 6 elements.  This also avoids a `ConstantLength<5>`
+/// synthesis issue (the Pow5Chip's partial-round layout fails during real
+/// proving with odd-length inputs at rate 2).
+///
+/// `MAX_PROPOSAL_AUTHORITY` occupies the 6th slot as a fixed constant.  It is
+/// baked into the delegation circuit's verification key via
+/// `assign_advice_from_constant`, so a malicious prover cannot substitute a
+/// different authority value.
+pub(crate) fn gov_commitment_hash(
+    g_d_new_x: pallas::Base,
+    pk_d_new_x: pallas::Base,
+    v_total: pallas::Base,
+    vote_round_id: pallas::Base,
+    gov_comm_rand: pallas::Base,
+) -> pallas::Base {
+    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<6>, 3, 2>::init()
+        .hash([
+            g_d_new_x,
+            pk_d_new_x,
+            v_total,
+            vote_round_id,
+            gov_comm_rand,
+            pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
+        ])
+}
+
 /// Defined in [Zcash Protocol Spec § 5.4.5.5: Orchard Key Agreement][concreteorchardkeyagreement].
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement

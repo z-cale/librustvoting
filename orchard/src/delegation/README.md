@@ -25,6 +25,8 @@
    * **psi_new**: pseudorandom field element for the output note, derived from `rseed_new` and `rho_new`.
    * **rcm_new**: the output note commitment trapdoor (randomness), derived from `rseed_new` and `rho_new`.
    * **cmx_1, cmx_2, cmx_3, cmx_4**: the extracted note commitments (`ExtractP(cm_i)`) of the four notes being delegated. Each is a Pallas base field element (x-coordinate of the commitment point). Hashed together with `gov_comm` and `vote_round_id` to produce `rho_signed` in condition 3. Currently free witnesses; a future condition (condition 10) will derive them in-circuit.
+   * **v_1, v_2, v_3, v_4**: the note values (in zatoshi) of the four delegated notes. Free witnesses summed in-circuit to produce `v_total`. Bound into `gov_comm` via condition 7; condition 9 will bind them to actual note commitments.
+   * **gov_comm_rand**: a random blinding factor for the governance commitment. Prevents observers from brute-forcing the address or weight from the public `gov_comm`.
 
 ## 1. Signed Note Commitment Integrity
 
@@ -196,6 +198,49 @@ Where:
 **Constructions:**
 - `SinsemillaChip` (second instance) — a separate Sinsemilla configuration using `advices[5..]` for the output note's NoteCommit, avoiding gate conflicts with the signed note's Sinsemilla instance.
 - `NoteCommitChip` (second instance) — configured with the second Sinsemilla config for decomposition/canonicity checking.
+
+## 7. Gov Commitment Integrity
+
+Purpose: prove that the governance commitment (a public input) is correctly derived from the output note's voting hotkey address, the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. This binds the delegated weight, voting hotkey, and authority scope into a single public commitment that ZKP #2 (vote proof) can open.
+
+```
+gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id, gov_comm_rand, MAX_PROPOSAL_AUTHORITY)
+```
+
+Where:
+- **g_d_new_x**: the x-coordinate of the output note's diversified generator (`ExtractP(g_d_new)`). Reuses the same ECC point already witnessed in condition 6.
+- **pk_d_new_x**: the x-coordinate of the output note's diversified transmission key (`ExtractP(pk_d_new)`). Reuses the same ECC point already witnessed in condition 6.
+- **v_total**: the sum `v_1 + v_2 + v_3 + v_4`, computed in-circuit via three `AddChip` additions. Each `v_i` is a free private witness (Pallas base field element representing a note value in zatoshi). The binding to actual note commitments arrives with condition 9 (Old Note Commitment Integrity).
+- **vote_round_id**: the vote round identifier — reuses the same cell witnessed in condition 3 (rho binding).
+- **gov_comm_rand**: a random blinding factor. Prevents observers from brute-forcing the address or weight from the public `gov_comm`.
+- **MAX_PROPOSAL_AUTHORITY**: `2^16 - 1 = 65535`. A 16-bit bitmask where each bit authorizes voting on the corresponding proposal (proposal ID = bit index from LSB). Full authority means all 16 proposals are authorized. Assigned via `assign_advice_from_constant` so the value is baked into the verification key — a malicious prover cannot substitute a different authority value.
+
+**Why 6 inputs?** The spec defines 5 semantic fields: `(vpk, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)`. Because `vpk` is a diversified address tuple `(g_d_new, pk_d_new)` represented as two x-coordinates, the Poseidon input naturally expands to 6 elements. This also avoids a `ConstantLength<5>` synthesis issue (the Pow5Chip's partial-round layout fails during real proving with odd-length inputs at rate 2). Both address components are explicitly bound, and `MAX_PROPOSAL_AUTHORITY` occupies its own dedicated slot.
+
+**Constraint:** The circuit computes `derived_gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id, gov_comm_rand, MAX_PROPOSAL_AUTHORITY)` and enforces strict equality with the `gov_comm` cell witnessed in condition 3 (which is itself constrained to the public input). This creates a chain: `gov_comm` (public) = `Poseidon(address, weight, round, randomness, authority)` = the same `gov_comm` hashed into `rho_signed`.
+
+**Constructions:**
+- `PoseidonChip` with `ConstantLength<6>` — same `Pow5Chip` / `P128Pow5T3` as used in conditions 2 and 3, with 6 inputs (3 absorption rounds at rate 2).
+- `AddChip` — three additions to sum `v_1 + v_2 + v_3 + v_4`.
+
+## 8. Minimum Voting Weight
+
+Purpose: prevent dust delegations by enforcing that the total delegated value meets a minimum threshold. Without this, an attacker could create many micro-delegations to pollute the delegation set.
+
+```
+v_total >= 12,500,000 zatoshi  (0.125 ZEC)
+```
+
+**Approach:** The circuit witnesses `diff = v_total - MIN_WEIGHT`, constrains `diff + MIN_WEIGHT == v_total` via `AddChip`, and range-checks `diff` to `[0, 2^70)` using the `LookupRangeCheckConfig`.
+
+- If `v_total >= MIN_WEIGHT`, then `diff` is a small non-negative integer that fits in 70 bits, and the range check passes.
+- If `v_total < MIN_WEIGHT`, then `diff` wraps around to approximately `2^254` (field arithmetic is modular), which vastly exceeds 70 bits, and the range check fails.
+
+**Why 70 bits?** The range check uses 7 words × 10 bits/word = 70 bits. This comfortably covers the u64 range (64 bits) of note values, with 6 bits of headroom for the 4-note sum.
+
+**Constructions:**
+- `AddChip` — constrains `diff + MIN_WEIGHT == v_total`.
+- `LookupRangeCheckConfig::copy_check` — decomposes `diff` into 7 words of 10 bits each and verifies each word via a lookup table. The `strict = true` flag ensures the running sum terminates at zero (no leftover bits).
 
 ## FAQ
 
