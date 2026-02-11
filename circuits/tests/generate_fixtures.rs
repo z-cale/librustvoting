@@ -109,10 +109,9 @@ fn generate_redpallas_fixtures() {
     let sk = SigningKey::<orchard::SpendAuth>::new(&mut rng);
     let vk = VerificationKey::from(&sk);
 
-    // The sighash MUST match api/codec.go ComputeSigHash placeholder:
-    //   Blake2b-256("ZALLY_SIGHASH_V0")
-    // CRITICAL: When ComputeSigHash is updated to a proper sig-excluding hash,
-    // this fixture generator must be updated to match and fixtures regenerated.
+    // The sighash is Blake2b-256("ZALLY_SIGHASH_V0"). It must match the value
+    // sent by the client as msg.sighash and the REAL_SIGHASH constant in
+    // tests/api/src/helpers.ts.
     let sighash_full = Blake2bParams::new()
         .hash_length(32)
         .hash(b"ZALLY_SIGHASH_V0");

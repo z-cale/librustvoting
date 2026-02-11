@@ -78,7 +78,6 @@ func handleVoteAnte(
 		IsRecheck:   ctx.IsReCheckTx(),
 		SigVerifier: sigVerifier,
 		ZKPVerifier: zkpVerifier,
-		SigHash:     vtx.SigHash,
 	}
 
 	if err := voteante.ValidateVoteTx(ctx, vtx.VoteMsg, k, opts); err != nil {

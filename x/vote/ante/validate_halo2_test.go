@@ -57,6 +57,7 @@ func TestHalo2DelegationValidProof(t *testing.T) {
 		},
 		Proof:       proof,
 		VoteRoundId: testRoundID,
+		Sighash:     make([]byte, 32), // dummy sighash (mock sig verifier accepts anything)
 	}
 
 	// Use the real Halo2 verifier but mock the signature verifier
@@ -64,7 +65,6 @@ func TestHalo2DelegationValidProof(t *testing.T) {
 	opts := ante.ValidateOpts{
 		SigVerifier: redpallas.NewMockVerifier(),
 		ZKPVerifier: halo2.NewVerifier(),
-		SigHash:     testSigHash,
 	}
 
 	// Create a test suite for the keeper/context setup, then run through
@@ -97,12 +97,12 @@ func TestHalo2DelegationWrongInput(t *testing.T) {
 		},
 		Proof:       proof,
 		VoteRoundId: testRoundID,
+		Sighash:     make([]byte, 32), // dummy sighash (mock sig verifier accepts anything)
 	}
 
 	opts := ante.ValidateOpts{
 		SigVerifier: redpallas.NewMockVerifier(),
 		ZKPVerifier: halo2.NewVerifier(),
-		SigHash:     testSigHash,
 	}
 
 	s := new(ValidateTestSuite)

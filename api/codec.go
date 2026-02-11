@@ -5,7 +5,6 @@ package api
 import (
 	"fmt"
 
-	"golang.org/x/crypto/blake2b"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/z-cale/zally/x/vote/types"
@@ -99,21 +98,3 @@ func DecodeVoteTx(raw []byte) (byte, types.VoteMessage, error) {
 	return tag, voteMsg, nil
 }
 
-// ComputeSigHash computes the sighash for RedPallas signature verification.
-//
-// CRITICAL: This is a placeholder implementation that hashes a fixed string
-// instead of the actual transaction bytes. The production implementation MUST
-// hash all serialized message fields EXCEPT spend_auth_sig to avoid the
-// circular dependency of signing a message that already contains the
-// signature. See CLAUDE.md "CRITICAL: ComputeSigHash placeholder" for details.
-//
-// The previous implementation hashed all raw bytes (including spend_auth_sig),
-// which made real RedPallas verification impossible due to the circular
-// dependency. This placeholder makes the sighash deterministic so that
-// pre-computed RedPallas fixtures can be used for real signature verification.
-func ComputeSigHash(raw []byte) []byte {
-	// CRITICAL: Replace with proper sig-excluding hash before production.
-	h, _ := blake2b.New256(nil) // unkeyed; never errors
-	h.Write([]byte("ZALLY_SIGHASH_V0"))
-	return h.Sum(nil)
-}

@@ -30,7 +30,6 @@ func CustomTxDecoder(standardDecoder sdk.TxDecoder) sdk.TxDecoder {
 				RawBytes: txBytes,
 				Tag:      tag,
 				VoteMsg:  voteMsg,
-				SigHash:  voteapi.ComputeSigHash(txBytes),
 			}, nil
 		}
 		return standardDecoder(txBytes)

@@ -172,6 +172,7 @@ type MsgRegisterDelegation struct {
 	GovNullifiers       [][]byte               `protobuf:"bytes,7,rep,name=gov_nullifiers,json=govNullifiers,proto3" json:"gov_nullifiers,omitempty"`                     // Up to 4 governance nullifiers
 	Proof               []byte                 `protobuf:"bytes,8,opt,name=proof,proto3" json:"proof,omitempty"`                                                          // Halo2 ZKP #1
 	VoteRoundId         []byte                 `protobuf:"bytes,9,opt,name=vote_round_id,json=voteRoundId,proto3" json:"vote_round_id,omitempty"`
+	Sighash             []byte                 `protobuf:"bytes,10,opt,name=sighash,proto3" json:"sighash,omitempty"` // Client-provided sighash for RedPallas signature verification (32 bytes)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -265,6 +266,13 @@ func (x *MsgRegisterDelegation) GetProof() []byte {
 func (x *MsgRegisterDelegation) GetVoteRoundId() []byte {
 	if x != nil {
 		return x.VoteRoundId
+	}
+	return nil
+}
+
+func (x *MsgRegisterDelegation) GetSighash() []byte {
+	if x != nil {
+		return x.Sighash
 	}
 	return nil
 }
@@ -577,7 +585,7 @@ const file_zvote_v1_tx_proto_rawDesc = "" +
 	"\x12nullifier_imt_root\x18\x06 \x01(\fR\x10nullifierImtRoot\x12\x17\n" +
 	"\anc_root\x18\a \x01(\fR\x06ncRoot\"?\n" +
 	"\x19MsgSetupVoteRoundResponse\x12\"\n" +
-	"\rvote_round_id\x18\x01 \x01(\fR\vvoteRoundId\"\xb1\x02\n" +
+	"\rvote_round_id\x18\x01 \x01(\fR\vvoteRoundId\"\xcb\x02\n" +
 	"\x15MsgRegisterDelegation\x12\x0e\n" +
 	"\x02rk\x18\x01 \x01(\fR\x02rk\x12$\n" +
 	"\x0espend_auth_sig\x18\x02 \x01(\fR\fspendAuthSig\x122\n" +
@@ -587,7 +595,9 @@ const file_zvote_v1_tx_proto_rawDesc = "" +
 	"\bgov_comm\x18\x06 \x01(\fR\agovComm\x12%\n" +
 	"\x0egov_nullifiers\x18\a \x03(\fR\rgovNullifiers\x12\x14\n" +
 	"\x05proof\x18\b \x01(\fR\x05proof\x12\"\n" +
-	"\rvote_round_id\x18\t \x01(\fR\vvoteRoundId\"\x1f\n" +
+	"\rvote_round_id\x18\t \x01(\fR\vvoteRoundId\x12\x18\n" +
+	"\asighash\x18\n" +
+	" \x01(\fR\asighash\"\x1f\n" +
 	"\x1dMsgRegisterDelegationResponse\"\xb9\x02\n" +
 	"\x17MsgCreateVoteCommitment\x12#\n" +
 	"\rvan_nullifier\x18\x01 \x01(\fR\fvanNullifier\x125\n" +

@@ -44,6 +44,7 @@ message MsgRegisterDelegation {
   repeated bytes gov_nullifiers = 7; // Up to 4 governance nullifiers
   bytes proof                  = 8;  // Halo2 ZKP #1
   bytes vote_round_id          = 9;
+  bytes sighash                = 10; // Client-provided sighash for RedPallas signature verification (32 bytes)
 }
 
 message MsgRegisterDelegationResponse {}

@@ -55,6 +55,7 @@ func TestEncodeDecodeRegisterDelegation(t *testing.T) {
 		GovNullifiers:       [][]byte{[]byte("nf1"), []byte("nf2")},
 		Proof:               []byte("proof"),
 		VoteRoundId:         []byte("roundid"),
+		Sighash:             make([]byte, 32),
 	}
 
 	raw, err := EncodeVoteTx(msg)
@@ -68,6 +69,7 @@ func TestEncodeDecodeRegisterDelegation(t *testing.T) {
 	decodedMsg, ok := decoded.(*types.MsgRegisterDelegation)
 	require.True(t, ok)
 	require.Equal(t, msg.Rk, decodedMsg.Rk)
+	require.Equal(t, msg.Sighash, decodedMsg.Sighash)
 	require.Equal(t, len(msg.GovNullifiers), len(decodedMsg.GovNullifiers))
 }
 
@@ -139,18 +141,6 @@ func TestDecodeVoteTx_InvalidTag(t *testing.T) {
 	_, _, err = DecodeVoteTx([]byte{0x05, 0x00})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid vote tx tag")
-}
-
-func TestComputeSigHash_Deterministic(t *testing.T) {
-	// CRITICAL: ComputeSigHash currently uses a fixed placeholder string.
-	// It always returns the same 32-byte Blake2b-256 hash regardless of input.
-	// This test verifies that property. When the placeholder is replaced with
-	// a proper sig-excluding hash, update this test accordingly.
-	hash1 := ComputeSigHash([]byte{0x01, 0x02, 0x03})
-	hash2 := ComputeSigHash([]byte{0x04, 0x05, 0x06})
-
-	require.Equal(t, hash1, hash2, "placeholder sighash should be constant")
-	require.Len(t, hash1, 32) // Blake2b-256 output
 }
 
 func TestTagForMessage(t *testing.T) {

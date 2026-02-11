@@ -56,8 +56,7 @@ var (
 	testBlockTime  = time.Unix(1_000_000, 0).UTC()
 	activeEndTime  = uint64(2_000_000) // well in the future relative to testBlockTime
 	expiredEndTime = uint64(999_999)   // in the past relative to testBlockTime
-	testRoundID    = bytes.Repeat([]byte{0x01}, 32)
-	testSigHash    = bytes.Repeat([]byte{0x99}, 32)
+	testRoundID = bytes.Repeat([]byte{0x01}, 32)
 )
 
 func newValidMsgSetupVoteRound() *types.MsgSetupVoteRound {
@@ -86,6 +85,7 @@ func newValidMsgRegisterDelegation() *types.MsgRegisterDelegation {
 		},
 		Proof:       bytes.Repeat([]byte{0x22}, 192),
 		VoteRoundId: testRoundID,
+		Sighash:     bytes.Repeat([]byte{0x99}, 32),
 	}
 }
 
@@ -121,7 +121,6 @@ func mockOpts() ante.ValidateOpts {
 	return ante.ValidateOpts{
 		SigVerifier: redpallas.NewMockVerifier(),
 		ZKPVerifier: zkp.NewMockVerifier(),
-		SigHash:     testSigHash,
 	}
 }
 
@@ -131,7 +130,6 @@ func recheckOpts() ante.ValidateOpts {
 		IsRecheck:   true,
 		SigVerifier: errSigVerifier{},
 		ZKPVerifier: errZKPVerifier{},
-		SigHash:     testSigHash,
 	}
 }
 
@@ -139,7 +137,6 @@ func failSigOpts() ante.ValidateOpts {
 	return ante.ValidateOpts{
 		SigVerifier: errSigVerifier{},
 		ZKPVerifier: zkp.NewMockVerifier(),
-		SigHash:     testSigHash,
 	}
 }
 
@@ -147,7 +144,6 @@ func failZKPOpts() ante.ValidateOpts {
 	return ante.ValidateOpts{
 		SigVerifier: redpallas.NewMockVerifier(),
 		ZKPVerifier: errZKPVerifier{},
-		SigHash:     testSigHash,
 	}
 }
 
@@ -822,7 +818,6 @@ func (s *ValidateTestSuite) TestValidateVoteTx_ValidationOrder() {
 			opts: ante.ValidateOpts{
 				SigVerifier: errSigVerifier{},
 				ZKPVerifier: errZKPVerifier{},
-				SigHash:     testSigHash,
 			},
 			setup: func() { s.setupActiveRound() },
 			// Should get invalid-signature, not invalid-proof.

@@ -28,9 +28,6 @@ type VoteTxWrapper struct {
 
 	// VoteMsg is the decoded vote message, used by the validation pipeline.
 	VoteMsg types.VoteMessage
-
-	// SigHash is the precomputed sighash for RedPallas verification.
-	SigHash []byte
 }
 
 // GetMsgs satisfies sdk.HasMsgs. Returns the single vote message as sdk.Msg.

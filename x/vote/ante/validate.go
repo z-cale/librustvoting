@@ -38,11 +38,6 @@ type ValidateOpts struct {
 	// ZKPVerifier is the zero-knowledge proof verifier.
 	// Use zkp.NewMockVerifier() during development.
 	ZKPVerifier zkp.Verifier
-
-	// SigHash is the hash of the raw transaction bytes that the RedPallas
-	// signature covers. Computed by the ABCI layer from the raw tx bytes
-	// before calling this pipeline. Only relevant for MsgRegisterDelegation.
-	SigHash []byte
 }
 
 // DefaultOpts returns ValidateOpts with mock verifiers for development/testing.
@@ -121,8 +116,8 @@ func verifyProofs(msg types.VoteMessage, opts ValidateOpts) error {
 // a MsgRegisterDelegation.
 func verifyDelegation(msg *types.MsgRegisterDelegation, opts ValidateOpts) error {
 	// RedPallas signature verification.
-	// The sighash is provided by the ABCI layer (computed from raw tx bytes).
-	if err := opts.SigVerifier.Verify(msg.Rk, opts.SigHash, msg.SpendAuthSig); err != nil {
+	// The sighash is provided by the client as msg.Sighash.
+	if err := opts.SigVerifier.Verify(msg.Rk, msg.Sighash, msg.SpendAuthSig); err != nil {
 		return fmt.Errorf("%w: %v", types.ErrInvalidSignature, err)
 	}
 

@@ -62,6 +62,9 @@ func (msg *MsgRegisterDelegation) ValidateBasic() error {
 	if len(msg.VoteRoundId) == 0 {
 		return fmt.Errorf("%w: vote_round_id cannot be empty", ErrInvalidField)
 	}
+	if len(msg.Sighash) != 32 {
+		return fmt.Errorf("%w: sighash must be 32 bytes, got %d", ErrInvalidField, len(msg.Sighash))
+	}
 	return nil
 }
 

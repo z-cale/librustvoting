@@ -46,9 +46,11 @@ func TestRedPallasDelegationValidSig(t *testing.T) {
 	sig := rpMustReadFixture(t, "valid_sig.bin")
 
 	// Build a MsgRegisterDelegation with real RedPallas signature data.
+	// The sighash is now a field on the message itself (sent by the client).
 	msg := &types.MsgRegisterDelegation{
-		Rk:                  rk,  // 32-byte real verification key
-		SpendAuthSig:        sig, // 64-byte real signature
+		Rk:                  rk,      // 32-byte real verification key
+		SpendAuthSig:        sig,     // 64-byte real signature
+		Sighash:             sighash, // 32-byte sighash the signature covers
 		SignedNoteNullifier: make([]byte, 32),
 		CmxNew:              make([]byte, 32),
 		EncMemo:             make([]byte, 64),
@@ -65,7 +67,6 @@ func TestRedPallasDelegationValidSig(t *testing.T) {
 	opts := ante.ValidateOpts{
 		SigVerifier: redpallas.NewVerifier(),
 		ZKPVerifier: zkp.NewMockVerifier(),
-		SigHash:     sighash,
 	}
 
 	// Create a test suite for the keeper/context setup, then run through
@@ -90,6 +91,7 @@ func TestRedPallasDelegationWrongSig(t *testing.T) {
 	msg := &types.MsgRegisterDelegation{
 		Rk:                  rk,       // correct verification key
 		SpendAuthSig:        wrongSig, // signature over a different message
+		Sighash:             sighash,  // same sighash — wrong sig should still fail
 		SignedNoteNullifier: make([]byte, 32),
 		CmxNew:              make([]byte, 32),
 		EncMemo:             make([]byte, 64),
@@ -104,7 +106,6 @@ func TestRedPallasDelegationWrongSig(t *testing.T) {
 	opts := ante.ValidateOpts{
 		SigVerifier: redpallas.NewVerifier(),
 		ZKPVerifier: zkp.NewMockVerifier(),
-		SigHash:     sighash,
 	}
 
 	s := new(ValidateTestSuite)
