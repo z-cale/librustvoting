@@ -8,6 +8,8 @@ struct ProposalListView: View {
 
     let store: StoreOf<Voting>
 
+    @State private var focusedProposalId: String?
+
     var body: some View {
         WithPerceptionTracking {
             VStack(spacing: 0) {
@@ -46,36 +48,19 @@ struct ProposalListView: View {
                     ScrollView {
                         LazyVStack(spacing: 12) {
                             ForEach(store.votingRound.proposals) { proposal in
-                                proposalCard(proposal, scrollProxy: proxy)
+                                proposalCard(proposal)
                                     .id(proposal.id)
+                                    .onAppear {
+                                        focusedProposalId = proposal.id
+                                    }
                             }
                         }
                         .padding(.horizontal, 24)
-                        .padding(.bottom, 100)
+                        .padding(.bottom, 24)
                     }
-                }
 
-                // Floating review button
-                VStack {
-                    ZashiButton(
-                        "Review & Submit",
-                        type: store.canSubmitVotes ? .primary : .quaternary
-                    ) {
-                        store.send(.reviewVotesTapped)
-                    }
-                    .disabled(!store.canSubmitVotes)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background {
-                        LinearGradient(
-                            colors: [
-                                Design.Surfaces.bgPrimary.color(colorScheme).opacity(0),
-                                Design.Surfaces.bgPrimary.color(colorScheme),
-                            ],
-                            startPoint: .top,
-                            endPoint: UnitPoint(x: 0.5, y: 0.3)
-                        )
-                    }
+                    // Bottom vote bar
+                    bottomVoteBar(scrollProxy: proxy)
                 }
             }
             .navigationTitle(store.votingRound.title)
@@ -92,12 +77,82 @@ struct ProposalListView: View {
         }
     }
 
+    // MARK: - Bottom Vote Bar
+
     @ViewBuilder
-    private func proposalCard(_ proposal: Proposal, scrollProxy proxy: ScrollViewProxy) -> some View {
+    private func bottomVoteBar(scrollProxy proxy: ScrollViewProxy) -> some View {
+        let focusedProposal = store.votingRound.proposals.first { $0.id == focusedProposalId }
+        let allVoted = store.allVoted
+
+        VStack(spacing: 0) {
+            Divider()
+
+            if allVoted {
+                // All voted — show review button
+                VStack(spacing: 8) {
+                    Text("All proposals voted!")
+                        .zFont(.medium, size: 13, style: Design.Text.secondary)
+
+                    ZashiButton(
+                        "Review & Submit",
+                        type: store.canSubmitVotes ? .primary : .quaternary
+                    ) {
+                        store.send(.reviewVotesTapped)
+                    }
+                    .disabled(!store.canSubmitVotes)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+            } else if let proposal = focusedProposal {
+                let vote = store.votes[proposal.id]
+
+                VStack(spacing: 10) {
+                    // Proposal title
+                    HStack {
+                        if let zip = proposal.zipNumber {
+                            Text(zip)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(proposal.title)
+                            .zFont(.medium, size: 13, style: Design.Text.primary)
+                            .lineLimit(1)
+                        Spacer()
+                        if let vote {
+                            VoteChip(choice: vote)
+                        }
+                    }
+
+                    // Vote buttons
+                    if vote == nil {
+                        HStack(spacing: 8) {
+                            bottomVoteButton("Support", color: .green, icon: "hand.thumbsup") {
+                                castAndScroll(proposalId: proposal.id, choice: .support, proxy: proxy)
+                            }
+                            bottomVoteButton("Oppose", color: .red, icon: "hand.thumbsdown") {
+                                castAndScroll(proposalId: proposal.id, choice: .oppose, proxy: proxy)
+                            }
+                            bottomVoteButton("Skip", color: .gray, icon: "forward") {
+                                castAndScroll(proposalId: proposal.id, choice: .skip, proxy: proxy)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+            }
+        }
+        .background(Design.Surfaces.bgPrimary.color(colorScheme))
+    }
+
+    // MARK: - Proposal Card (read-only)
+
+    @ViewBuilder
+    private func proposalCard(_ proposal: Proposal) -> some View {
         let vote = store.votes[proposal.id]
+        let isFocused = focusedProposalId == proposal.id && vote == nil
 
         VStack(alignment: .leading, spacing: 10) {
-            // Header: title + chip (if voted)
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     if let zip = proposal.zipNumber {
@@ -113,7 +168,6 @@ struct ProposalListView: View {
                     VoteChip(choice: vote)
                 }
 
-                // Detail chevron
                 Button {
                     store.send(.proposalTapped(proposal.id))
                 } label: {
@@ -127,22 +181,6 @@ struct ProposalListView: View {
             Text(proposal.description)
                 .zFont(.regular, size: 13, style: Design.Text.secondary)
                 .lineLimit(2)
-
-            // Inline vote buttons (show when not yet voted)
-            if vote == nil {
-                HStack(spacing: 8) {
-                    inlineVoteButton("Support", color: .green, icon: "hand.thumbsup") {
-                        castAndScroll(proposalId: proposal.id, choice: .support, proxy: proxy)
-                    }
-                    inlineVoteButton("Oppose", color: .red, icon: "hand.thumbsdown") {
-                        castAndScroll(proposalId: proposal.id, choice: .oppose, proxy: proxy)
-                    }
-                    inlineVoteButton("Skip", color: .gray, icon: "forward") {
-                        castAndScroll(proposalId: proposal.id, choice: .skip, proxy: proxy)
-                    }
-                }
-                .padding(.top, 4)
-            }
         }
         .padding(16)
         .background(Design.Surfaces.bgPrimary.color(colorScheme))
@@ -150,16 +188,23 @@ struct ProposalListView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .stroke(
-                    vote != nil ? voteColor(vote).opacity(0.3) : Design.Surfaces.strokeSecondary.color(colorScheme),
-                    lineWidth: 1
+                    isFocused
+                        ? Design.Surfaces.brandPrimary.color(colorScheme).opacity(0.5)
+                        : vote != nil
+                            ? voteColor(vote).opacity(0.3)
+                            : Design.Surfaces.strokeSecondary.color(colorScheme),
+                    lineWidth: isFocused ? 2 : 1
                 )
         )
         .shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 1)
         .animation(.easeInOut(duration: 0.2), value: vote)
+        .animation(.easeInOut(duration: 0.15), value: isFocused)
     }
 
+    // MARK: - Bottom Vote Button
+
     @ViewBuilder
-    private func inlineVoteButton(
+    private func bottomVoteButton(
         _ title: String,
         color: Color,
         icon: String,
@@ -168,32 +213,31 @@ struct ProposalListView: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
             }
             .foregroundStyle(color)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .background(color.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
     }
+
+    // MARK: - Helpers
 
     private func castAndScroll(proposalId: String, choice: VoteChoice, proxy: ScrollViewProxy) {
         store.send(.castVote(proposalId: proposalId, choice: choice))
 
-        // Find the next unvoted proposal after this one
         let proposals = store.votingRound.proposals
         if let currentIndex = proposals.firstIndex(where: { $0.id == proposalId }) {
-            // Look for the next unvoted proposal after the current one
             let nextUnvoted = proposals[(currentIndex + 1)...].first { store.votes[$0.id] == nil }
-                // Fall back to any unvoted proposal before the current one
                 ?? proposals[..<currentIndex].first { store.votes[$0.id] == nil }
 
             if let target = nextUnvoted {
                 withAnimation {
-                    proxy.scrollTo(target.id, anchor: .top)
+                    proxy.scrollTo(target.id, anchor: .center)
                 }
             }
         }
