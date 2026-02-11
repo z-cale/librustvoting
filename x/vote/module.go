@@ -1,8 +1,11 @@
 package vote
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 
 	"cosmossdk.io/core/appmodule"
 	"cosmossdk.io/core/store"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 
 	"github.com/z-cale/zally/x/vote/keeper"
@@ -106,11 +110,50 @@ func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
 }
 
-// EndBlock is called at the end of each block.
-// Phase 4: will compute the commitment tree root and store it keyed by block height.
-func (am AppModule) EndBlock(_ context.Context) error {
-	// TODO(Phase 4): Compute commitment tree root from all leaves appended in this block.
-	// Store the root keyed by block height for anchor verification.
+// EndBlock computes the commitment tree root and stores it keyed by block height.
+// Only writes a new root when the tree has changed (new leaves appended).
+func (am AppModule) EndBlock(goCtx context.Context) error {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	kvStore := am.keeper.OpenKVStore(ctx)
+
+	state, err := am.keeper.GetCommitmentTreeState(kvStore)
+	if err != nil {
+		return err
+	}
+
+	// No leaves — nothing to compute.
+	if state.NextIndex == 0 {
+		return nil
+	}
+
+	root, err := am.keeper.ComputeTreeRoot(kvStore, state.NextIndex)
+	if err != nil {
+		return err
+	}
+
+	// Skip if root unchanged (no new leaves since last computation).
+	if bytes.Equal(root, state.Root) {
+		return nil
+	}
+
+	blockHeight := uint64(ctx.BlockHeight())
+
+	if err := am.keeper.SetCommitmentRootAtHeight(kvStore, blockHeight, root); err != nil {
+		return err
+	}
+
+	state.Root = root
+	state.Height = blockHeight
+	if err := am.keeper.SetCommitmentTreeState(kvStore, state); err != nil {
+		return err
+	}
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		types.EventTypeCommitmentTreeRoot,
+		sdk.NewAttribute(types.AttributeKeyTreeRoot, fmt.Sprintf("%x", root)),
+		sdk.NewAttribute(types.AttributeKeyBlockHeight, strconv.FormatUint(blockHeight, 10)),
+	))
+
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"cosmossdk.io/core/store"
 	"cosmossdk.io/log"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"golang.org/x/crypto/blake2b"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/z-cale/zally/x/vote/types"
@@ -152,6 +153,23 @@ func (k Keeper) AppendCommitment(kvStore store.KVStore, commitment []byte) (uint
 	}
 
 	return index, nil
+}
+
+// ComputeTreeRoot computes the commitment tree root as Blake2b-256 over all leaves.
+// This is a placeholder; production will use an incremental Poseidon Merkle tree.
+func (k Keeper) ComputeTreeRoot(kvStore store.KVStore, nextIndex uint64) ([]byte, error) {
+	if nextIndex == 0 {
+		return nil, nil
+	}
+	h, _ := blake2b.New256(nil) // unkeyed; never errors
+	for i := uint64(0); i < nextIndex; i++ {
+		leaf, err := kvStore.Get(types.CommitmentLeafKey(i))
+		if err != nil {
+			return nil, err
+		}
+		h.Write(leaf)
+	}
+	return h.Sum(nil), nil
 }
 
 // GetCommitmentRootAtHeight returns the commitment tree root stored at a specific height.

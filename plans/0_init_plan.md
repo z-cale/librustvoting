@@ -16,10 +16,10 @@ todos:
     status: done
   - id: msg-handlers
     content: "Phase 4: Implement keeper logic for all 4 message types (setup round, register delegation, vote commitment, reveal share)"
-    status: pending
+    status: done
   - id: commitment-tree
     content: "Phase 4: Implement append-only commitment tree state + EndBlocker root computation + height-indexed root snapshots"
-    status: pending
+    status: done
   - id: raw-abci-api
     content: "Phase 5: Build JSON REST endpoints + raw ABCI tx pipeline (custom CheckTx/FinalizeBlock decoding, bypass Cosmos Tx envelope)"
     status: pending

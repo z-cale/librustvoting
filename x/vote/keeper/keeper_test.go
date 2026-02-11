@@ -608,6 +608,82 @@ func (s *KeeperTestSuite) TestCheckNullifiersUnique() {
 }
 
 // ---------------------------------------------------------------------------
+// ComputeTreeRoot
+// ---------------------------------------------------------------------------
+
+func (s *KeeperTestSuite) TestComputeTreeRoot() {
+	tests := []struct {
+		name       string
+		leaves     [][]byte
+		expectNil  bool
+		expectLen  int
+	}{
+		{
+			name:      "empty tree returns nil",
+			leaves:    nil,
+			expectNil: true,
+		},
+		{
+			name:      "single leaf produces 32-byte root",
+			leaves:    [][]byte{bytes.Repeat([]byte{0xA1}, 32)},
+			expectLen: 32,
+		},
+		{
+			name: "two leaves produce 32-byte root",
+			leaves: [][]byte{
+				bytes.Repeat([]byte{0xA1}, 32),
+				bytes.Repeat([]byte{0xA2}, 32),
+			},
+			expectLen: 32,
+		},
+	}
+
+	for _, tc := range tests {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			kv := s.keeper.OpenKVStore(s.ctx)
+
+			for _, leaf := range tc.leaves {
+				_, err := s.keeper.AppendCommitment(kv, leaf)
+				s.Require().NoError(err)
+			}
+
+			root, err := s.keeper.ComputeTreeRoot(kv, uint64(len(tc.leaves)))
+			s.Require().NoError(err)
+			if tc.expectNil {
+				s.Require().Nil(root)
+			} else {
+				s.Require().Len(root, tc.expectLen)
+			}
+		})
+	}
+}
+
+func (s *KeeperTestSuite) TestComputeTreeRoot_DeterministicAndDistinct() {
+	s.SetupTest()
+	kv := s.keeper.OpenKVStore(s.ctx)
+
+	_, err := s.keeper.AppendCommitment(kv, bytes.Repeat([]byte{0x01}, 32))
+	s.Require().NoError(err)
+
+	root1, err := s.keeper.ComputeTreeRoot(kv, 1)
+	s.Require().NoError(err)
+
+	// Same state produces same root.
+	root1Again, err := s.keeper.ComputeTreeRoot(kv, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(root1, root1Again)
+
+	// Add another leaf — root changes.
+	_, err = s.keeper.AppendCommitment(kv, bytes.Repeat([]byte{0x02}, 32))
+	s.Require().NoError(err)
+
+	root2, err := s.keeper.ComputeTreeRoot(kv, 2)
+	s.Require().NoError(err)
+	s.Require().NotEqual(root1, root2)
+}
+
+// ---------------------------------------------------------------------------
 // Metadata accessors
 // ---------------------------------------------------------------------------
 
