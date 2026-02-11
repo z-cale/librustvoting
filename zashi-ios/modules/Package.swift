@@ -85,6 +85,7 @@ let package = Package(
         .library(name: "UserPreferencesStorage", targets: ["UserPreferencesStorage"]),
         .library(name: "Utils", targets: ["Utils"]),
         .library(name: "Vendors", targets: ["Vendors"]),
+        .library(name: "Voting", targets: ["Voting"]),
         .library(name: "WalletBalances", targets: ["WalletBalances"]),
         .library(name: "WalletBirthday", targets: ["WalletBirthday"]),
         .library(name: "WalletConfigProvider", targets: ["WalletConfigProvider"]),
@@ -690,6 +691,7 @@ let package = Package(
                 "SupportDataGenerator",
                 "SwapAndPay",
                 "TorSetup",
+                "Voting",
                 "TransactionDetails",
                 "TransactionsManager",
                 "UIComponents",
@@ -1106,6 +1108,15 @@ let package = Package(
                 .product(name: "KeystoneSDK", package: "keystone-sdk-ios")
             ],
             path: "Sources/Vendors"
+        ),
+        .target(
+            name: "Voting",
+            dependencies: [
+                "Generated",
+                "UIComponents",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "Sources/Features/Voting"
         ),
         .target(
             name: "WalletBalances",

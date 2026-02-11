@@ -88,6 +88,8 @@ public struct HomeView: View {
                     tokenName: tokenName
                 )
 
+                votingBanner()
+
                 ScrollView {
                     if store.transactionListState.transactions.isEmpty && !store.transactionListState.isInvalidated {
                         noTransactionsView()
@@ -326,6 +328,43 @@ public struct HomeView: View {
                 .padding(.bottom, 4)
             }
         }
+    }
+    @ViewBuilder func votingBanner() -> some View {
+        Button {
+            store.send(.votingBannerTapped)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.title3)
+                    .foregroundStyle(Design.Surfaces.brandPrimary.color(colorScheme))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("NU7 Sentiment Poll")
+                        .zFont(.semiBold, size: 14, style: Design.Text.primary)
+                    Text("5 days left \u{00B7} 11 proposals")
+                        .zFont(.regular, size: 12, style: Design.Text.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Design.Text.tertiary.color(colorScheme))
+            }
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: Design.Radius._2xl)
+                    .fill(Design.Surfaces.bgPrimary.color(colorScheme))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Design.Radius._2xl)
+                            .stroke(Design.Surfaces.strokeSecondary.color(colorScheme), lineWidth: 1)
+                    )
+            }
+            .shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .screenHorizontalPadding()
+        .padding(.top, 12)
     }
 }
 

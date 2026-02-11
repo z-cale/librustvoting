@@ -142,6 +142,12 @@ extension Root {
                 state.path = .currencyConversionSetup
                 return .none
 
+            case .home(.votingBannerTapped):
+                state.votingState = .initial
+                state.votingState.isKeystoneUser = state.homeState.isKeystoneAccountActive
+                state.path = .voting
+                return .none
+
             case .home(.torSetupTapped(let settingsView)):
                 state.torSetupState = .initial
                 state.torSetupState.isSettingsView = settingsView
@@ -333,6 +339,12 @@ extension Root {
                         }
                     }
                 }
+                return .none
+
+                // MARK: - Voting
+
+            case .voting(.dismissFlow):
+                state.path = nil
                 return .none
 
                 // MARK: - Wallet Backup Coord Flow
