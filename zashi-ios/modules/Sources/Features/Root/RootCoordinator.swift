@@ -143,6 +143,7 @@ extension Root {
                 return .none
 
             case .home(.votingBannerTapped):
+                state.homeState.moreRequest = false
                 state.votingState = .initial
                 state.votingState.isKeystoneUser = state.homeState.isKeystoneAccountActive
                 state.path = .voting
