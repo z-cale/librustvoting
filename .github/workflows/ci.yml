@@ -74,3 +74,55 @@ jobs:
         run: make circuits-test
       - name: Run Go Halo2 verification tests
         run: make test-halo2
+
+  test-api:
+    name: API Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build and install zallyd
+        run: make install
+      - name: Initialize chain
+        run: bash scripts/init.sh
+      - name: Enable REST API server
+        run: sed -i '/\[api\]/,/\[.*\]/ s/enable = false/enable = true/' ~/.zallyd/config/app.toml
+      - name: Start chain in background
+        run: |
+          zallyd start --home ~/.zallyd > chain.log 2>&1 &
+          echo "Chain PID: $!"
+      - name: Wait for chain readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:1317/cosmos/base/tendermint/v1beta1/blocks/latest > /dev/null 2>&1; then
+              echo "Chain is producing blocks"
+              exit 0
+            fi
+            echo "Waiting for chain to start... ($i/60)"
+            sleep 2
+          done
+          echo "Chain failed to start within 120s"
+          cat chain.log
+          exit 1
+      - name: Install npm dependencies
+        run: npm ci
+        working-directory: tests/api
+      - name: Run API tests
+        run: make test-api
+        env:
+          ZALLY_API_URL: http://localhost:1317
+      - name: Upload chain log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-log
+          path: chain.log
+          retention-days: 7
