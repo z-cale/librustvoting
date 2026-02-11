@@ -13,6 +13,9 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,6 +29,9 @@ jobs:
   test-unit:
     name: Unit Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,6 +45,9 @@ jobs:
   test-integration:
     name: Integration Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -52,6 +61,9 @@ jobs:
   test-halo2:
     name: Halo2 ZKP Verification Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -64,8 +76,8 @@ jobs:
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
-          path: circuits/target
-          key: ${{ runner.os }}-circuits-${{ hashFiles('circuits/Cargo.lock') }}
+          path: sdk/circuits/target
+          key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-circuits-
       - name: Build Rust circuits library
@@ -78,6 +90,9 @@ jobs:
   test-api:
     name: API Integration Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -114,7 +129,7 @@ jobs:
           exit 1
       - name: Install npm dependencies
         run: npm ci
-        working-directory: tests/api
+        working-directory: sdk/tests/api
       - name: Run API tests
         run: make test-api
         env:
@@ -124,5 +139,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chain-log
-          path: chain.log
+          path: sdk/chain.log
           retention-days: 7

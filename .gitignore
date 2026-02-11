@@ -1,7 +1,8 @@
-zallyd
+# Go binary
+sdk/zallyd
 
 # Rust build artifacts
-circuits/target/
+sdk/circuits/target/
 
 # Node
 node_modules/
