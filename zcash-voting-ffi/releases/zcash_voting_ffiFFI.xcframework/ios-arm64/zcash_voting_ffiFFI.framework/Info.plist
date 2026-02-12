@@ -5,7 +5,7 @@
 	<key>CFBundleExecutable</key>
 	<string>zcash_voting_ffiFFI</string>
 	<key>CFBundleIdentifier</key>
-	<string>zcash_voting_ffiFFI</string>
+	<string>org.zcash.zcash-voting-ffiFFI</string>
 	<key>CFBundleName</key>
 	<string>zcash_voting_ffiFFI</string>
 	<key>CFBundlePackageType</key>
