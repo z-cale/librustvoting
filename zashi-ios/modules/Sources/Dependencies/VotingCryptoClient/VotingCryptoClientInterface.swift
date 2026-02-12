@@ -1,3 +1,4 @@
+import Combine
 import ComposableArchitecture
 import Foundation
 import VotingModels
@@ -11,10 +12,15 @@ extension DependencyValues {
 
 @DependencyClient
 public struct VotingCryptoClient {
+    // --- State stream (DB → UI, follows SDKSynchronizer pattern) ---
+    public var stateStream: @Sendable () -> AnyPublisher<VotingDbState, Never>
+        = { Empty().eraseToAnyPublisher() }
+
     // --- Database lifecycle ---
     public var openDatabase: @Sendable (_ path: String) async throws -> Void
     public var initRound: @Sendable (_ params: VotingRoundParams, _ sessionJson: String?) async throws -> Void
     public var getRoundState: @Sendable (_ roundId: String) async throws -> RoundStateInfo
+    public var getVotes: @Sendable (_ roundId: String) async throws -> [VoteRecord]
     public var listRounds: @Sendable () async throws -> [RoundSummaryInfo]
     public var clearRound: @Sendable (_ roundId: String) async throws -> Void
 

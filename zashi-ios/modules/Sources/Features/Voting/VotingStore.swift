@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import ComposableArchitecture
 import VotingAPIClient
@@ -104,10 +105,15 @@ public struct Voting {
         }
     }
 
+    let cancelStateStreamId = UUID()
+
     public enum Action: Equatable {
         // Navigation
         case dismissFlow
         case goBack
+
+        // DB state stream (single source of truth)
+        case votingDbStateChanged(VotingDbState)
 
         // Delegation signing
         case delegationApproved
@@ -143,12 +149,24 @@ public struct Voting {
             // MARK: - Navigation
 
             case .dismissFlow:
-                return .none
+                return .cancel(id: cancelStateStreamId)
 
             case .goBack:
                 if state.screenStack.count > 1 {
                     state.screenStack.removeLast()
                 }
+                return .none
+
+            // MARK: - DB State Stream
+
+            case .votingDbStateChanged(let dbState):
+                // Votes: DB is source of truth, overwrite in-memory dict
+                state.votes = dbState.votesByProposal
+                // Proof status: if DB says proof succeeded and we're not actively generating, sync it
+                if dbState.roundState.proofGenerated && state.delegationProofStatus != .complete {
+                    state.delegationProofStatus = .complete
+                }
+                print("[Voting] DB state: phase=\(dbState.roundState.phase), \(dbState.votes.count) votes")
                 return .none
 
             // MARK: - Delegation Signing
@@ -166,53 +184,63 @@ public struct Voting {
                 state.delegationProofStatus = .generating(progress: 0)
                 let roundId = state.roundId
                 let snapshotHeight = state.votingRound.snapshotHeight
-                return .run { [votingCrypto] send in
-                    // Open database
-                    let dbPath = FileManager.default
-                        .urls(for: .documentDirectory, in: .userDomainMask)[0]
-                        .appendingPathComponent("voting.sqlite3").path
-                    try await votingCrypto.openDatabase(dbPath)
-
-                    // Clear any previous data for this round, then initialize
-                    try? await votingCrypto.clearRound(roundId)
-                    let params = VotingRoundParams(
-                        voteRoundId: Data(repeating: 0x01, count: 16),
-                        snapshotHeight: snapshotHeight,
-                        eaPK: Data(repeating: 0xEA, count: 32),
-                        ncRoot: Data(repeating: 0xAA, count: 32),
-                        nullifierIMTRoot: Data(repeating: 0xBB, count: 32)
-                    )
-                    try await votingCrypto.initRound(params, nil)
-
-                    // Stub delegation setup: hotkey → action → witness
-                    let hotkey = try await votingCrypto.generateHotkey(roundId)
-                    let mockNote = NoteInfo(
-                        commitment: Data(repeating: 0x01, count: 32),
-                        nullifier: Data(repeating: 0x02, count: 32),
-                        value: 1_000_000,
-                        position: 42
-                    )
-                    let action = try await votingCrypto.constructDelegationAction(
-                        roundId, hotkey, [mockNote]
-                    )
-                    _ = try await votingCrypto.buildDelegationWitness(
-                        roundId, action,
-                        [Data(repeating: 0x11, count: 32)],
-                        [Data(repeating: 0x22, count: 32)]
-                    )
-
-                    // Generate delegation proof (long-running, reports progress)
-                    for try await event in votingCrypto.generateDelegationProof(roundId) {
-                        switch event {
-                        case .progress(let p):
-                            await send(.delegationProofProgress(p))
-                        case .completed:
-                            await send(.delegationProofCompleted)
-                        }
+                return .merge(
+                    // Subscribe to DB state stream (follows SDKSynchronizer pattern)
+                    .publisher {
+                        votingCrypto.stateStream()
+                            .receive(on: DispatchQueue.main)
+                            .map(Action.votingDbStateChanged)
                     }
-                } catch: { error, send in
-                    await send(.delegationProofFailed(error.localizedDescription))
-                }
+                    .cancellable(id: cancelStateStreamId, cancelInFlight: true),
+                    // Run delegation proof pipeline
+                    .run { [votingCrypto] send in
+                        // Open database
+                        let dbPath = FileManager.default
+                            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                            .appendingPathComponent("voting.sqlite3").path
+                        try await votingCrypto.openDatabase(dbPath)
+
+                        // Clear any previous data for this round, then initialize
+                        try? await votingCrypto.clearRound(roundId)
+                        let params = VotingRoundParams(
+                            voteRoundId: Data(repeating: 0x01, count: 16),
+                            snapshotHeight: snapshotHeight,
+                            eaPK: Data(repeating: 0xEA, count: 32),
+                            ncRoot: Data(repeating: 0xAA, count: 32),
+                            nullifierIMTRoot: Data(repeating: 0xBB, count: 32)
+                        )
+                        try await votingCrypto.initRound(params, nil)
+
+                        // Stub delegation setup: hotkey → action → witness
+                        let hotkey = try await votingCrypto.generateHotkey(roundId)
+                        let mockNote = NoteInfo(
+                            commitment: Data(repeating: 0x01, count: 32),
+                            nullifier: Data(repeating: 0x02, count: 32),
+                            value: 1_000_000,
+                            position: 42
+                        )
+                        let action = try await votingCrypto.constructDelegationAction(
+                            roundId, hotkey, [mockNote]
+                        )
+                        _ = try await votingCrypto.buildDelegationWitness(
+                            roundId, action,
+                            [Data(repeating: 0x11, count: 32)],
+                            [Data(repeating: 0x22, count: 32)]
+                        )
+
+                        // Generate delegation proof (long-running, reports progress)
+                        for try await event in votingCrypto.generateDelegationProof(roundId) {
+                            switch event {
+                            case .progress(let p):
+                                await send(.delegationProofProgress(p))
+                            case .completed:
+                                await send(.delegationProofCompleted)
+                            }
+                        }
+                    } catch: { error, send in
+                        await send(.delegationProofFailed(error.localizedDescription))
+                    }
+                )
 
             case .delegationProofProgress(let progress):
                 state.delegationProofStatus = .generating(progress: progress)

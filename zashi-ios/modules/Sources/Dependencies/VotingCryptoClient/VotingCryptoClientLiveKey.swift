@@ -1,3 +1,4 @@
+import Combine
 import ComposableArchitecture
 import Foundation
 import VotingModels
@@ -22,10 +23,34 @@ private final class StreamProgressReporter: ZcashVotingFFI.ProofProgressReporter
 
 extension VotingCryptoClient: DependencyKey {
     public static var liveValue: Self {
-        // The database is created lazily via openDatabase()
         let dbActor = DatabaseActor()
+        let stateSubject = CurrentValueSubject<VotingDbState, Never>(.initial)
+
+        /// Query rounds + votes tables and publish combined state.
+        func publishState(db: ZcashVotingFFI.VotingDatabase, roundId: String) {
+            guard let roundState = try? db.getRoundState(roundId: roundId) else { return }
+            let ffiVotes = (try? db.getVotes(roundId: roundId)) ?? []
+            let dbState = VotingDbState(
+                roundState: RoundStateInfo(
+                    roundId: roundState.roundId,
+                    phase: roundState.phase.toModel(),
+                    snapshotHeight: roundState.snapshotHeight,
+                    hotkeyAddress: roundState.hotkeyAddress,
+                    delegatedWeight: roundState.delegatedWeight,
+                    proofGenerated: roundState.proofGenerated,
+                    votesCast: roundState.votesCast
+                ),
+                votes: ffiVotes.map { $0.toModel() }
+            )
+            stateSubject.send(dbState)
+        }
 
         return Self(
+            stateStream: {
+                stateSubject
+                    .dropFirst() // Skip initial empty state
+                    .eraseToAnyPublisher()
+            },
             openDatabase: { path in
                 try await dbActor.open(path: path)
             },
@@ -39,6 +64,7 @@ extension VotingCryptoClient: DependencyKey {
                     nullifierImtRoot: params.nullifierIMTRoot
                 )
                 try db.initRound(params: ffiParams, sessionJson: sessionJson)
+                publishState(db: db, roundId: params.voteRoundId.hexString)
             },
             getRoundState: { roundId in
                 let db = try await dbActor.database()
@@ -52,6 +78,11 @@ extension VotingCryptoClient: DependencyKey {
                     proofGenerated: state.proofGenerated,
                     votesCast: state.votesCast
                 )
+            },
+            getVotes: { roundId in
+                let db = try await dbActor.database()
+                let ffiVotes = try db.getVotes(roundId: roundId)
+                return ffiVotes.map { $0.toModel() }
             },
             listRounds: {
                 let db = try await dbActor.database()
@@ -114,12 +145,14 @@ extension VotingCryptoClient: DependencyKey {
                     rk: action.rk,
                     sighash: action.sighash
                 )
-                return try db.buildDelegationWitness(
+                let witness = try db.buildDelegationWitness(
                     roundId: roundId,
                     action: ffiAction,
                     inclusionProofs: inclusionProofs,
                     exclusionProofs: exclusionProofs
                 )
+                publishState(db: db, roundId: roundId)
+                return witness
             },
             generateDelegationProof: { roundId in
                 AsyncThrowingStream { continuation in
@@ -137,6 +170,7 @@ extension VotingCryptoClient: DependencyKey {
                                 ))
                                 return
                             }
+                            publishState(db: db, roundId: roundId)
                             continuation.yield(.completed(result.proof))
                             continuation.finish()
                         } catch {
@@ -182,6 +216,7 @@ extension VotingCryptoClient: DependencyKey {
                                 vanWitness: vanWitness,
                                 progress: reporter
                             )
+                            publishState(db: db, roundId: roundId)
                             let bundle = VoteCommitmentBundle(
                                 vanNullifier: result.vanNullifier,
                                 voteAuthorityNoteNew: result.voteAuthorityNoteNew,
@@ -239,6 +274,7 @@ extension VotingCryptoClient: DependencyKey {
             markVoteSubmitted: { roundId, proposalId in
                 let db = try await dbActor.database()
                 try db.markVoteSubmitted(roundId: roundId, proposalId: proposalId)
+                publishState(db: db, roundId: roundId)
             }
         )
     }
@@ -277,6 +313,14 @@ private extension VoteChoice {
         case .skip: return 2
         }
     }
+
+    static func fromFFI(_ value: UInt32) -> VoteChoice {
+        switch value {
+        case 0: return .support
+        case 1: return .oppose
+        default: return .skip
+        }
+    }
 }
 
 private extension Data {
@@ -295,5 +339,15 @@ private extension ZcashVotingFFI.RoundPhase {
         case .delegationProved: return .delegationProved
         case .voteReady: return .voteReady
         }
+    }
+}
+
+private extension ZcashVotingFFI.VoteRecord {
+    func toModel() -> VotingModels.VoteRecord {
+        VotingModels.VoteRecord(
+            proposalId: UInt32(proposalId) ?? 0,
+            choice: VoteChoice.fromFFI(choice),
+            submitted: submitted
+        )
     }
 }
