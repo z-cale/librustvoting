@@ -559,6 +559,8 @@ public protocol VotingDatabaseProtocol: AnyObject, Sendable {
     
     func getVotes(roundId: String) throws  -> [VoteRecord]
     
+    func getWalletNotes(walletDbPath: String, snapshotHeight: UInt64, networkId: UInt32) throws  -> [NoteInfo]
+    
     func initRound(params: VotingRoundParams, sessionJson: String?) throws 
     
     func listRounds() throws  -> [RoundSummary]
@@ -716,6 +718,16 @@ open func getVotes(roundId: String)throws  -> [VoteRecord]  {
     return try  FfiConverterSequenceTypeVoteRecord.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_method_votingdatabase_get_votes(self.uniffiClonePointer(),
         FfiConverterString.lower(roundId),$0
+    )
+})
+}
+    
+open func getWalletNotes(walletDbPath: String, snapshotHeight: UInt64, networkId: UInt32)throws  -> [NoteInfo]  {
+    return try  FfiConverterSequenceTypeNoteInfo.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
+    uniffi_zcash_voting_ffi_fn_method_votingdatabase_get_wallet_notes(self.uniffiClonePointer(),
+        FfiConverterString.lower(walletDbPath),
+        FfiConverterUInt64.lower(snapshotHeight),
+        FfiConverterUInt32.lower(networkId),$0
     )
 })
 }
@@ -2531,6 +2543,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_get_votes() != 19701) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_get_wallet_notes() != 19542) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_init_round() != 11012) {

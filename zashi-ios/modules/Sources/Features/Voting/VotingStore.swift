@@ -32,6 +32,9 @@ public struct Voting {
         public var walletDbPath: String
         public var networkId: UInt32
 
+        /// Cached wallet notes from the snapshot query, used by delegation proof.
+        public var walletNotes: [NoteInfo] = []
+
         public var selectedProposalId: UInt32?
 
         // Vote awaiting user confirmation in detail view
@@ -118,6 +121,11 @@ public struct Voting {
         case dismissFlow
         case goBack
 
+        // Wallet notes / voting weight
+        case fetchVotingWeight
+        case votingWeightLoaded(UInt64, [NoteInfo])
+        case votingWeightFailed(String)
+
         // DB state stream (single source of truth)
         case votingDbStateChanged(VotingDbState)
 
@@ -163,6 +171,39 @@ public struct Voting {
                 }
                 return .none
 
+            // MARK: - Wallet Notes / Voting Weight
+
+            case .fetchVotingWeight:
+                let walletDbPath = state.walletDbPath
+                let snapshotHeight = state.votingRound.snapshotHeight
+                let networkId = state.networkId
+                return .run { [votingCrypto] send in
+                    // Open the voting database (needed for FFI method)
+                    let dbPath = FileManager.default
+                        .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        .appendingPathComponent("voting.sqlite3").path
+                    try await votingCrypto.openDatabase(dbPath)
+
+                    let notes = try await votingCrypto.getWalletNotes(
+                        walletDbPath, snapshotHeight, networkId
+                    )
+                    let totalWeight = notes.reduce(UInt64(0)) { $0 + $1.value }
+                    print("[Voting] Loaded \(notes.count) notes at height \(snapshotHeight), total weight: \(totalWeight)")
+                    await send(.votingWeightLoaded(totalWeight, notes))
+                } catch: { error, send in
+                    print("[Voting] Failed to load wallet notes: \(error)")
+                    await send(.votingWeightFailed(error.localizedDescription))
+                }
+
+            case .votingWeightLoaded(let weight, let notes):
+                state.votingWeight = weight
+                state.walletNotes = notes
+                return .none
+
+            case .votingWeightFailed(let error):
+                print("[Voting] Wallet notes error: \(error)")
+                return .none
+
             // MARK: - DB State Stream
 
             case .votingDbStateChanged(let dbState):
@@ -190,8 +231,7 @@ public struct Voting {
                 state.delegationProofStatus = .generating(progress: 0)
                 let roundId = state.roundId
                 let snapshotHeight = state.votingRound.snapshotHeight
-                let walletDbPath = state.walletDbPath
-                let networkId = state.networkId
+                let cachedNotes = state.walletNotes
                 return .merge(
                     // Subscribe to DB state stream (follows SDKSynchronizer pattern)
                     .publisher {
@@ -202,11 +242,7 @@ public struct Voting {
                     .cancellable(id: cancelStateStreamId, cancelInFlight: true),
                     // Run delegation proof pipeline
                     .run { [votingCrypto] send in
-                        // Open database
-                        let dbPath = FileManager.default
-                            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-                            .appendingPathComponent("voting.sqlite3").path
-                        try await votingCrypto.openDatabase(dbPath)
+                        // DB already opened by fetchVotingWeight
 
                         // Clear any previous data for this round, then initialize
                         try? await votingCrypto.clearRound(roundId)
@@ -219,17 +255,14 @@ public struct Voting {
                         )
                         try await votingCrypto.initRound(params, nil)
 
-                        // Query real wallet notes at snapshot height
+                        // Use cached wallet notes from fetchVotingWeight
                         let hotkey = try await votingCrypto.generateHotkey(roundId)
-                        let notes = try await votingCrypto.getWalletNotes(
-                            walletDbPath, snapshotHeight, networkId
-                        )
                         // Mock nk/g_d/pk_d — real derivation comes in a later step
                         let mockNk = Data(repeating: 0x11, count: 32)
                         let mockGd = Data(repeating: 0x22, count: 32)
                         let mockPkd = Data(repeating: 0x33, count: 32)
                         let action = try await votingCrypto.constructDelegationAction(
-                            roundId, hotkey, notes, mockNk, mockGd, mockPkd
+                            roundId, hotkey, cachedNotes, mockNk, mockGd, mockPkd
                         )
                         _ = try await votingCrypto.buildDelegationWitness(
                             roundId, action,
