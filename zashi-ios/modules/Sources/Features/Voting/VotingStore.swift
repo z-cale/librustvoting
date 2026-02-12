@@ -172,7 +172,7 @@ public struct Voting {
                 return .run { [votingCrypto] send in
                     // In the full flow: constructDelegationAction → fetch proofs → buildDelegationWitness → generateDelegationProof
                     // For now the witness is a placeholder; the stub streams progress over ~4s
-                    let witness = Data()
+                    let witness = Data(repeating: 0xDD, count: 512)
                     for try await event in votingCrypto.generateDelegationProof(witness) {
                         switch event {
                         case .progress(let p):

@@ -59,24 +59,25 @@ extension VotingCryptoClient: DependencyKey {
                 )
             },
             generateDelegationProof: { witness in
-                // Progress simulation stays in Swift; the actual proof call goes to Rust.
-                // When real ZKP generation lands (~4-8s), we'll replace this with
-                // callback-based progress or polling.
                 AsyncThrowingStream { continuation in
                     Task {
-                        for step in 1...7 {
-                            try await Task.sleep(for: .milliseconds(500))
-                            continuation.yield(.progress(Double(step) / 8.0))
+                        do {
+                            for step in 1...7 {
+                                try await Task.sleep(for: .milliseconds(500))
+                                continuation.yield(.progress(Double(step) / 8.0))
+                            }
+                            let result = try ZcashVotingFFI.generateDelegationProof(witness: witness)
+                            guard result.success else {
+                                continuation.finish(throwing: VotingCryptoError.proofFailed(
+                                    result.error ?? "unknown"
+                                ))
+                                return
+                            }
+                            continuation.yield(.completed(result.proof))
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
                         }
-                        let result = try ZcashVotingFFI.generateDelegationProof(witness: witness)
-                        guard result.success else {
-                            continuation.finish(throwing: VotingCryptoError.proofFailed(
-                                result.error ?? "unknown"
-                            ))
-                            return
-                        }
-                        continuation.yield(.completed(result.proof))
-                        continuation.finish()
                     }
                 }
             },
@@ -95,39 +96,41 @@ extension VotingCryptoClient: DependencyKey {
                 }
             },
             buildVoteCommitment: { proposalId, choice, encShares, vanWitness in
-                // Progress simulation stays in Swift; actual proof call goes to Rust.
                 AsyncThrowingStream { continuation in
                     Task {
-                        for step in 1...3 {
-                            try await Task.sleep(for: .milliseconds(100))
-                            continuation.yield(.progress(Double(step) / 4.0))
-                        }
-                        let ffiShares = encShares.map {
-                            ZcashVotingFFI.EncryptedShare(
-                                c1: $0.c1,
-                                c2: $0.c2,
-                                shareIndex: $0.shareIndex,
-                                plaintextValue: $0.plaintextValue
+                        do {
+                            for step in 1...3 {
+                                try await Task.sleep(for: .milliseconds(100))
+                                continuation.yield(.progress(Double(step) / 4.0))
+                            }
+                            let ffiShares = encShares.map {
+                                ZcashVotingFFI.EncryptedShare(
+                                    c1: $0.c1,
+                                    c2: $0.c2,
+                                    shareIndex: $0.shareIndex,
+                                    plaintextValue: $0.plaintextValue
+                                )
+                            }
+                            let result = try ZcashVotingFFI.buildVoteCommitment(
+                                proposalId: String(proposalId),
+                                choice: choice.ffiValue,
+                                encShares: ffiShares,
+                                vanWitness: vanWitness
                             )
+                            let bundle = VoteCommitmentBundle(
+                                vanNullifier: result.vanNullifier,
+                                voteAuthorityNoteNew: result.voteAuthorityNoteNew,
+                                voteCommitment: result.voteCommitment,
+                                proposalId: proposalId,
+                                proof: result.proof,
+                                voteRoundId: Data(repeating: 0, count: 32),
+                                voteCommTreeAnchorHeight: 0
+                            )
+                            continuation.yield(.completed(bundle.proof))
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
                         }
-                        let result = try ZcashVotingFFI.buildVoteCommitment(
-                            proposalId: String(proposalId),
-                            choice: choice.ffiValue,
-                            encShares: ffiShares,
-                            vanWitness: vanWitness
-                        )
-                        // Map back to VotingModels type (includes extra fields for chain submission)
-                        let bundle = VoteCommitmentBundle(
-                            vanNullifier: result.vanNullifier,
-                            voteAuthorityNoteNew: result.voteAuthorityNoteNew,
-                            voteCommitment: result.voteCommitment,
-                            proposalId: proposalId,
-                            proof: result.proof,
-                            voteRoundId: Data(repeating: 0, count: 32),
-                            voteCommTreeAnchorHeight: 0
-                        )
-                        continuation.yield(.completed(bundle.proof))
-                        continuation.finish()
                     }
                 }
             },
