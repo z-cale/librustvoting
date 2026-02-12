@@ -1,0 +1,41 @@
+---
+description: Load the full voting protocol design context from Obsidian and Figma
+alwaysApply: false
+---
+
+# /sync-design — Load Voting Protocol Design Context
+
+When this rule is invoked, load the following two sources of truth for the voting protocol design and confirm what you retrieved.
+
+## 1. Gov Steps V1 (Obsidian)
+
+Read the design spec via the in-repo symlink:
+
+```
+zcaloooors/Voting/Gov Steps V1.md
+```
+
+This document contains the full protocol specification: glossary, Phase 0–5, all three ZKP circuit definitions (ZKP #1 delegation, ZKP #2 vote, ZKP #3 share reveal), appendices on El Gamal and tally.
+
+## 2. Wallet SDK Operations → Cosmos SDK Messages (Figma)
+
+Fetch the FigJam board via the Figma MCP:
+
+- **Tool:** `get_figjam`
+- **fileKey:** `xJmIb490SVXlpUr9y1WrN4`
+- **nodeId:** `0:1`
+- **URL:** https://www.figma.com/board/xJmIb490SVXlpUr9y1WrN4/Wallet-SDK-Operations-to-Cosmos-SDK-Messages?node-id=0-1
+
+This diagram maps the client/server/chain flow across four sections:
+- **Wallet SDK (Client)** — note identification, keystone signing, ZKP #1 and #2 generation
+- **Helper Server** — share payload relay with temporal unlinkability, ZKP #3 generation
+- **Cosmos SDK Vote Chain** — `MsgDelegateVote`, `MsgCastVote`, `MsgRevealShare`
+- **Chain State Updates** — nullifier sets, vote commitment trees, encrypted tally accumulator
+
+## After loading
+
+Summarize what you loaded and confirm both sources are available. Then ask how to proceed.
+
+## MCP setup reference
+
+See `docs/ai_setup.md` for Figma MCP configuration and Obsidian symlink setup.
