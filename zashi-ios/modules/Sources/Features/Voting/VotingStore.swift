@@ -29,6 +29,8 @@ public struct Voting {
         public var votingWeight: UInt64
         public var isKeystoneUser: Bool
         public var roundId: String
+        public var walletDbPath: String
+        public var networkId: UInt32
 
         public var selectedProposalId: UInt32?
 
@@ -96,12 +98,16 @@ public struct Voting {
             votingRound: VotingRound = MockVotingService.votingRound,
             votingWeight: UInt64 = MockVotingService.votingWeight,
             isKeystoneUser: Bool = false,
-            roundId: String = "0101010101010101010101010101010101010101010101010101010101010101"
+            roundId: String = "0101010101010101010101010101010101010101010101010101010101010101",
+            walletDbPath: String = "",
+            networkId: UInt32 = 0
         ) {
             self.votingRound = votingRound
             self.votingWeight = votingWeight
             self.isKeystoneUser = isKeystoneUser
             self.roundId = roundId
+            self.walletDbPath = walletDbPath
+            self.networkId = networkId
         }
     }
 
@@ -184,6 +190,8 @@ public struct Voting {
                 state.delegationProofStatus = .generating(progress: 0)
                 let roundId = state.roundId
                 let snapshotHeight = state.votingRound.snapshotHeight
+                let walletDbPath = state.walletDbPath
+                let networkId = state.networkId
                 return .merge(
                     // Subscribe to DB state stream (follows SDKSynchronizer pattern)
                     .publisher {
@@ -211,20 +219,17 @@ public struct Voting {
                         )
                         try await votingCrypto.initRound(params, nil)
 
-                        // Stub delegation setup: hotkey → action → witness
+                        // Query real wallet notes at snapshot height
                         let hotkey = try await votingCrypto.generateHotkey(roundId)
-                        let mockNote = NoteInfo(
-                            commitment: Data(repeating: 0x01, count: 32),
-                            nullifier: Data(repeating: 0x02, count: 32),
-                            value: 1_000_000,
-                            position: 42
+                        let notes = try await votingCrypto.getWalletNotes(
+                            walletDbPath, snapshotHeight, networkId
                         )
                         // Mock nk/g_d/pk_d — real derivation comes in a later step
                         let mockNk = Data(repeating: 0x11, count: 32)
                         let mockGd = Data(repeating: 0x22, count: 32)
                         let mockPkd = Data(repeating: 0x33, count: 32)
                         let action = try await votingCrypto.constructDelegationAction(
-                            roundId, hotkey, [mockNote], mockNk, mockGd, mockPkd
+                            roundId, hotkey, notes, mockNk, mockGd, mockPkd
                         )
                         _ = try await votingCrypto.buildDelegationWitness(
                             roundId, action,

@@ -97,6 +97,22 @@ extension VotingCryptoClient: DependencyKey {
                 let db = try await dbActor.database()
                 try db.clearRound(roundId: roundId)
             },
+            getWalletNotes: { walletDbPath, snapshotHeight, networkId in
+                let db = try await dbActor.database()
+                let ffiNotes = try db.getWalletNotes(
+                    walletDbPath: walletDbPath,
+                    snapshotHeight: snapshotHeight,
+                    networkId: networkId
+                )
+                return ffiNotes.map {
+                    NoteInfo(
+                        commitment: $0.commitment,
+                        nullifier: $0.nullifier,
+                        value: $0.value,
+                        position: $0.position
+                    )
+                }
+            },
             generateHotkey: { roundId in
                 let db = try await dbActor.database()
                 let hotkey = try db.generateHotkey(roundId: roundId)
