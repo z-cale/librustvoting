@@ -258,37 +258,41 @@ pub(crate) fn rho_binding_hash(
         .hash([cmx_1, cmx_2, cmx_3, cmx_4, gov_comm, vote_round_id])
 }
 
+/// Domain tag for Vote Authority Notes in the vote commitment tree.
+///
+/// VANs and Vote Commitments share the same Merkle tree, so their Poseidon
+/// preimages use a domain tag to prevent cross-type collisions:
+/// `DOMAIN_VAN = 0` for VANs, `DOMAIN_VC = 1` for Vote Commitments.
+pub(crate) const DOMAIN_VAN: u64 = 0;
+
 /// Maximum proposal authority — full 16-bit bitmask (`2^16 - 1 = 65535`).
 ///
 /// Each bit authorizes voting on the corresponding proposal (proposal ID =
 /// bit index from LSB).  This constant is the default for a fresh delegation
-/// and is hashed into `gov_comm` as a fixed 6th Poseidon input.
+/// and is hashed into `gov_comm` as a fixed Poseidon input.
 pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535;
 
 /// Governance commitment hash for the delegation circuit (condition 7).
 ///
 /// ```text
-/// gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
-///                     MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+/// gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+///                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
 /// ```
 ///
-/// Binds the governance commitment to the output note's voting hotkey address,
-/// the total voting weight, the vote round, a blinding factor, and the
-/// proposal authority bitmask.
+/// Binds the governance commitment to the domain tag, the output note's
+/// voting hotkey address, the total voting weight, the vote round, a blinding
+/// factor, and the proposal authority bitmask.
 ///
-/// # Parameter layout — `ConstantLength<6>`
+/// # Parameter layout — `ConstantLength<7>`
 ///
-/// The spec defines 5 semantic fields: `(vpk, v_total, vote_round_id,
-/// MAX_PROPOSAL_AUTHORITY, gov_comm_rand)`.  Because `vpk` is a diversified
-/// address tuple represented as two x-coordinates, the Poseidon input
-/// naturally expands to 6 elements.  This also avoids a `ConstantLength<5>`
-/// synthesis issue (the Pow5Chip's partial-round layout fails during real
-/// proving with odd-length inputs at rate 2).
+/// The spec defines 6 semantic fields: `(DOMAIN_VAN, vpk, v_total,
+/// vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)`.  Because `vpk` is
+/// a diversified address tuple represented as two x-coordinates, the Poseidon
+/// input naturally expands to 7 elements.
 ///
-/// `MAX_PROPOSAL_AUTHORITY` occupies the 5th slot as a fixed constant.  It is
-/// baked into the delegation circuit's verification key via
-/// `assign_advice_from_constant`, so a malicious prover cannot substitute a
-/// different authority value.
+/// `DOMAIN_VAN` and `MAX_PROPOSAL_AUTHORITY` are fixed constants, baked into
+/// the delegation circuit's verification key via `assign_advice_from_constant`,
+/// so a malicious prover cannot substitute different values.
 pub(crate) fn gov_commitment_hash(
     g_d_new_x: pallas::Base,
     pk_d_new_x: pallas::Base,
@@ -296,8 +300,9 @@ pub(crate) fn gov_commitment_hash(
     vote_round_id: pallas::Base,
     gov_comm_rand: pallas::Base,
 ) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<6>, 3, 2>::init()
+    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<7>, 3, 2>::init()
         .hash([
+            pallas::Base::from(DOMAIN_VAN),
             g_d_new_x,
             pk_d_new_x,
             v_total,

@@ -197,13 +197,14 @@ Where:
 
 ## 7. Gov Commitment Integrity
 
-Purpose: prove that the governance commitment (a public input) is correctly derived from the output note's voting hotkey address, the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. Binds the delegated weight, voting hotkey, and authority scope into a single public commitment that ZKP #2 (vote proof) can open.
+Purpose: prove that the governance commitment (a public input) is correctly derived from the domain tag, the output note's voting hotkey address, the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. Binds the delegated weight, voting hotkey, and authority scope into a single public commitment that ZKP #2 (vote proof) can open. The domain tag provides domain separation from Vote Commitments in the shared vote commitment tree.
 
 ```
-gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
 ```
 
 Where:
+- **DOMAIN_VAN**: `0`. Domain separation tag for Vote Authority Notes (vs `DOMAIN_VC = 1` for Vote Commitments). Assigned via `assign_advice_from_constant` so the value is baked into the verification key.
 - **g_d_new_x**: the x-coordinate of the output note's diversified generator. Reuses the ECC point from condition 6.
 - **pk_d_new_x**: the x-coordinate of the output note's diversified transmission key. Reuses the ECC point from condition 6.
 - **v_total**: the sum `v_1 + v_2 + v_3 + v_4`, computed in-circuit via three `AddChip` additions. **Each `v_i` is an internal wire** — produced by per-note condition 9 (note commitment integrity), not a free witness. The value is bound to the actual note commitment.

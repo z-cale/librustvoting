@@ -123,6 +123,12 @@ const GOV_NULL_OFFSETS: [usize; 4] = [GOV_NULL_1, GOV_NULL_2, GOV_NULL_3, GOV_NU
 /// cannot substitute a different authority value.
 pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535; // 2^16 - 1
 
+/// Domain tag for Vote Authority Notes (see `spec::DOMAIN_VAN`).
+///
+/// Prepended as the first Poseidon input in `gov_comm` (condition 7) for
+/// domain separation from Vote Commitments in the shared tree.
+pub(crate) const DOMAIN_VAN: u64 = 0;
+
 // ================================================================
 // Config
 // ================================================================
@@ -1196,26 +1202,25 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // ---------------------------------------------------------------
         // Condition 7: Gov commitment integrity.
-        // gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
-        //                     MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+        // gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+        //                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
         // ---------------------------------------------------------------
 
         // Gov commitment integrity (condition 7).
         //
-        // gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
-        //                     MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+        // gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+        //                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
         //
         // Proves that the governance commitment (public input) is correctly derived
-        // from the output note's voting hotkey address, the total voting weight,
-        // the vote round identifier, a blinding factor, and the proposal authority
-        // bitmask (MAX_PROPOSAL_AUTHORITY = 65535 for full authority).
+        // from the domain tag, the output note's voting hotkey address, the total
+        // voting weight, the vote round identifier, a blinding factor, and the
+        // proposal authority bitmask (MAX_PROPOSAL_AUTHORITY = 65535 for full
+        // authority).
         //
-        // Uses ConstantLength<6>: the spec's 5 semantic inputs
-        // (vpk, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
-        // expand to 6 because vpk is a diversified address tuple represented as
-        // two x-coordinates (g_d_new_x, pk_d_new_x).  This also avoids a
-        // ConstantLength<5> synthesis issue with the Pow5Chip's partial-round
-        // layout during real proving.
+        // Uses ConstantLength<7>: the spec's 6 semantic inputs
+        // (DOMAIN_VAN, vpk, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY,
+        // gov_comm_rand) expand to 7 because vpk is a diversified address tuple
+        // represented as two x-coordinates (g_d_new_x, pk_d_new_x).
         let v_total = {
             let gov_comm_rand = assign_free_advice(
                 layouter.namespace(|| "witness gov_comm_rand"),
@@ -1238,10 +1243,24 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 &v_cells[3],
             )?;
 
+            // DOMAIN_VAN — constant-constrained domain tag for Vote Authority
+            // Notes.  Provides domain separation from Vote Commitments in the
+            // shared vote commitment tree.
+            let domain_van = layouter.assign_region(
+                || "DOMAIN_VAN constant",
+                |mut region| {
+                    region.assign_advice_from_constant(
+                        || "domain_van",
+                        config.advices[0],
+                        0,
+                        pallas::Base::from(DOMAIN_VAN),
+                    )
+                },
+            )?;
+
             // MAX_PROPOSAL_AUTHORITY — constant-constrained so the value is
             // baked into the verification key and cannot be altered by a
-            // malicious prover.  This is the 5th Poseidon input; it occupies
-            // the slot reserved for proposal authority in the spec.
+            // malicious prover.
             let max_proposal_authority = layouter.assign_region(
                 || "MAX_PROPOSAL_AUTHORITY constant",
                 |mut region| {
@@ -1254,10 +1273,11 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 },
             )?;
 
-            // Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
-            //          MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+            // Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+            //          vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
             let derived_gov_comm = {
                 let poseidon_message = [
+                    domain_van,
                     g_d_new_x,
                     pk_d_new_x,
                     v_total.clone(),
@@ -1269,7 +1289,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     pallas::Base,
                     _,
                     poseidon::P128Pow5T3,
-                    ConstantLength<6>,
+                    ConstantLength<7>,
                     3,
                     2,
                 >::init(
@@ -1278,7 +1298,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )?;
                 poseidon_hasher.hash(
                     layouter.namespace(|| {
-                        "Poseidon(g_d_new_x, pk_d_new_x, v_total, round, authority, rand)"
+                        "Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, round, authority, rand)"
                     }),
                     poseidon_message,
                 )?

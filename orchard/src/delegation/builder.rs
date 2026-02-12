@@ -199,8 +199,8 @@ pub fn build_delegation_bundle(
     let notes: [NoteSlotWitness; 4] = note_slots.try_into().unwrap_or_else(|_| unreachable!());
 
     // Condition 7: gov commitment integrity.
-    // gov_comm = Poseidon(g_d_new_x, pk_d_new_x, v_total, vote_round_id,
-    //                     MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+    // gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+    //                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
     // Extract the output address as two x-coordinates (vpk representation).
     let v_total = pallas::Base::from(v_values.iter().sum::<u64>());
 
