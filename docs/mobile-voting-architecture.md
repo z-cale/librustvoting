@@ -137,7 +137,7 @@ VotingView.onAppear
     -> notes cached in State.walletNotes for use by startDelegationProof
 ```
 
-The wallet DB path and network ID are injected into `Voting.State` by the parent reducer. The current prototype snapshot height is **3,235,467** (one block before [tx 0bac2a68ca...](https://mainnet.zcashexplorer.app/transactions/0bac2a68ca6cd7deca65a65322da5b678097e927b2325131d089d47b1d9cbc97) at block 3,235,468).
+The wallet DB path is resolved at runtime from `DatabaseFilesClient` and `ZcashSDKEnvironment` (TCA dependencies), not passed through State. This avoids coupling the parent coordinator to wallet DB naming conventions. The current prototype snapshot height is **3,235,467** (one block before [tx 0bac2a68ca...](https://mainnet.zcashexplorer.app/transactions/0bac2a68ca6cd7deca65a65322da5b678097e927b2325131d089d47b1d9cbc97) at block 3,235,468).
 
 ### Dependencies
 
