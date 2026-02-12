@@ -305,9 +305,15 @@ public struct Voting {
                         guard let choice = votes[proposal.id] else { continue }
 
                         // Build vote commitment (ZKP #2) — drain stream to completion
-                        let mockWitness = Data()
+                        let mockWitness = Data(repeating: 0xDD, count: 64)
+                        let mockShares = [EncryptedShare(
+                            c1: Data(repeating: 0xC1, count: 32),
+                            c2: Data(repeating: 0xC2, count: 32),
+                            shareIndex: 0,
+                            plaintextValue: 1
+                        )]
                         var proofData = Data()
-                        for try await event in votingCrypto.buildVoteCommitment(proposal.id, choice, [], mockWitness) {
+                        for try await event in votingCrypto.buildVoteCommitment(proposal.id, choice, mockShares, mockWitness) {
                             if case .completed(let proof) = event {
                                 proofData = proof
                             }
