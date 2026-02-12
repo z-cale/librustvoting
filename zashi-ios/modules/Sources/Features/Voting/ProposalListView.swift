@@ -51,6 +51,11 @@ struct ProposalListView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
             }
+            .onAppear {
+                if let id = store.activeProposalId {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
             .onChange(of: store.activeProposalId) { newId in
                 if let newId {
                     withAnimation(.easeInOut(duration: 0.2)) {
