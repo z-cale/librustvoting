@@ -1,19 +1,18 @@
 //! IMT (Indexed Merkle Tree) utilities for the delegation proof system.
 //!
-//! Provides out-of-circuit helpers for building and verifying Poseidon2-based
+//! Provides out-of-circuit helpers for building and verifying Poseidon-based
 //! Indexed Merkle Tree non-membership proofs using the (low, high) leaf model.
 //! Each leaf stores a (low, high) pair defining an interval; the leaf hash is
-//! Poseidon2(low, high), then a standard Merkle path authenticates the leaf.
+//! Poseidon(low, high), then a standard Merkle path authenticates the leaf.
 //! A non-membership proof shows that a nullifier falls within the interval.
 //! Used by the delegation circuit and builder.
 
 use ff::PrimeField;
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength};
-use lazy_static::lazy_static;
 use pasta_curves::pallas;
 
-/// Depth of the nullifier Indexed Merkle Tree Merkle path (Poseidon2-based).
-/// Total Poseidon2 calls per proof = 1 (leaf hash) + 29 (path) = 30.
+/// Depth of the nullifier Indexed Merkle Tree Merkle path (Poseidon-based).
+/// Total Poseidon calls per proof = 1 (leaf hash) + 29 (path) = 30.
 pub const IMT_DEPTH: usize = 29;
 
 /// Domain tag for governance authorization nullifier (per spec §1.3.2, condition 14).
@@ -28,18 +27,6 @@ pub(crate) fn gov_auth_domain_tag() -> pallas::Base {
 /// Compute Poseidon hash of two field elements (out of circuit).
 pub(crate) fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
     poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([a, b])
-}
-
-// Parsed once and reused to avoid reparsing constants on every IMT hash call.
-lazy_static! {
-    static ref POSEIDON2_PARAMS: super::poseidon2::Poseidon2Params<pallas::Base> =
-        super::poseidon2::Poseidon2Params::new();
-}
-
-/// Compute Poseidon2 hash of two field elements (out of circuit).
-/// Used for IMT Merkle tree hashing.
-pub(crate) fn poseidon2_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
-    super::poseidon2::poseidon2_hash([a, b], &POSEIDON2_PARAMS)
 }
 
 /// Compute governance nullifier out-of-circuit (per spec §1.3.2, condition 14).
@@ -60,7 +47,7 @@ pub(crate) fn gov_null_hash(
 /// IMT non-membership proof data ((low, high) leaf model).
 ///
 /// Each leaf stores an explicit (low, high) pair defining an interval.
-/// The leaf hash is `Poseidon2(low, high)`, followed by a standard
+/// The leaf hash is `Poseidon(low, high)`, followed by a standard
 /// 29-level Merkle path to the root.
 #[derive(Clone, Debug)]
 pub struct ImtProofData {
@@ -96,17 +83,17 @@ use alloc::vec::Vec;
 #[cfg(any(test, feature = "test-dependencies"))]
 use ff::Field;
 
-/// Precomputed empty subtree hashes for the IMT (Poseidon2-based).
+/// Precomputed empty subtree hashes for the IMT (Poseidon-based).
 ///
-/// `empty[0] = Poseidon2(0, 0)` (hash of an empty (low=0, high=0) leaf),
-/// `empty[i] = Poseidon2(empty[i-1], empty[i-1])` for i >= 1.
+/// `empty[0] = Poseidon(0, 0)` (hash of an empty (low=0, high=0) leaf),
+/// `empty[i] = Poseidon(empty[i-1], empty[i-1])` for i >= 1.
 #[cfg(any(test, feature = "test-dependencies"))]
 pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
-    let empty_leaf = poseidon2_hash_2(pallas::Base::zero(), pallas::Base::zero());
+    let empty_leaf = poseidon_hash_2(pallas::Base::zero(), pallas::Base::zero());
     let mut hashes = vec![empty_leaf];
     for _ in 1..=IMT_DEPTH {
         let prev = *hashes.last().unwrap();
-        hashes.push(poseidon2_hash_2(prev, prev));
+        hashes.push(poseidon_hash_2(prev, prev));
     }
     hashes
 }
@@ -125,7 +112,7 @@ pub struct SpacedLeafImtProvider {
     /// Bracket data: `(low, high)` for each of the 17 brackets.
     leaves: Vec<(pallas::Base, pallas::Base)>,
     /// Bottom 5 levels of the 32-leaf subtree.
-    /// `subtree_levels[0]` has 32 leaf hashes Poseidon2(low, high),
+    /// `subtree_levels[0]` has 32 leaf hashes Poseidon(low, high),
     /// `subtree_levels[5]` has 1 subtree root.
     subtree_levels: Vec<Vec<pallas::Base>>,
 }
@@ -153,11 +140,11 @@ impl SpacedLeafImtProvider {
             leaves.push((low, high));
         }
 
-        // Build 32-leaf subtree. Each leaf is Poseidon2(low, high).
-        let empty_leaf_hash = poseidon2_hash_2(pallas::Base::zero(), pallas::Base::zero());
+        // Build 32-leaf subtree. Each leaf is Poseidon(low, high).
+        let empty_leaf_hash = poseidon_hash_2(pallas::Base::zero(), pallas::Base::zero());
         let mut level0 = vec![empty_leaf_hash; 32];
         for (k, (low, high)) in leaves.iter().enumerate() {
-            level0[k] = poseidon2_hash_2(*low, *high);
+            level0[k] = poseidon_hash_2(*low, *high);
         }
 
         let mut subtree_levels = vec![level0];
@@ -165,7 +152,7 @@ impl SpacedLeafImtProvider {
             let prev = subtree_levels.last().unwrap();
             let mut current = Vec::with_capacity(prev.len() / 2);
             for j in 0..(prev.len() / 2) {
-                current.push(poseidon2_hash_2(prev[2 * j], prev[2 * j + 1]));
+                current.push(poseidon_hash_2(prev[2 * j], prev[2 * j + 1]));
             }
             subtree_levels.push(current);
         }
@@ -173,7 +160,7 @@ impl SpacedLeafImtProvider {
         // Compute full root: hash subtree root up through levels 5..30 with empty siblings.
         let mut root = subtree_levels[5][0];
         for l in 5..IMT_DEPTH {
-            root = poseidon2_hash_2(root, empty[l]);
+            root = poseidon_hash_2(root, empty[l]);
         }
 
         SpacedLeafImtProvider {

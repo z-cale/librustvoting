@@ -24,7 +24,7 @@ use orchard::{
     value::NoteValue,
 };
 
-const K: u32 = 13;
+const K: u32 = 14;
 const MERKLE_DEPTH: usize = 32;
 
 struct TrackingAllocator;

@@ -1,6 +1,6 @@
 # Delegation Circuit (ZKP 1)
 
-A single circuit proving all 16 conditions of the delegation ZKP at K=13 (8,192 rows). The circuit handles the keystone note (conditions 1–8), four per-note slots (conditions 9–15 ×4), and gov null pairwise distinctness (condition 16) in one proof.
+A single circuit proving all 16 conditions of the delegation ZKP at K=14 (16,384 rows). The circuit handles the keystone note (conditions 1–8), four per-note slots (conditions 9–15 ×4), and gov null pairwise distinctness (condition 16) in one proof.
 
 **Public inputs:** 12 field elements.
 **Per-note slots:** 4 (unused slots are padded with zero-value notes).
@@ -49,7 +49,7 @@ A single circuit proving all 16 conditions of the delegation ZKP at K=13 (8,192 
    * **imt_low**: the interval start (low bound of the bracketing leaf).
    * **imt_high**: the interval end (high bound of the bracketing leaf).
    * **imt_leaf_pos**: position of the leaf in the IMT.
-   * **imt_path**: Poseidon2-based IMT Merkle authentication path (29 pure siblings).
+   * **imt_path**: Poseidon-based IMT Merkle authentication path (29 pure siblings).
 
 - Private (governance — condition 7)
    * **gov_comm_rand**: a random blinding factor for the governance commitment.
@@ -298,13 +298,13 @@ Same `DeriveNullifier` construction as condition 2, but applied to each delegate
 
 ## 13. IMT Non-Membership (x4)
 
-Purpose: prove the note's nullifier has NOT been spent, using a Poseidon2-based Indexed Merkle Tree with a (low, high) leaf model. Each leaf stores an explicit interval `[low, high]`.
+Purpose: prove the note's nullifier has NOT been spent, using a Poseidon-based Indexed Merkle Tree with a (low, high) leaf model. Each leaf stores an explicit interval `[low, high]`.
 
 **Approach:**
 
-1. **Leaf hash**: `leaf_hash = Poseidon2(low, high)` — authenticates both interval bounds via the Merkle root.
+1. **Leaf hash**: `leaf_hash = Poseidon(low, high)` — authenticates both interval bounds via the Merkle root.
 
-2. **Merkle path** (29 levels, starting from `leaf_hash`): At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon2(left, right)` computes the parent. The swap gate constrains:
+2. **Merkle path** (29 levels, starting from `leaf_hash`): At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon(left, right)` computes the parent. The swap gate constrains:
    - `left = current + pos_bit * (sibling - current)`
    - `left + right = current + sibling`
    - `bool_check(pos_bit)`
@@ -318,11 +318,11 @@ Purpose: prove the note's nullifier has NOT been spent, using a Poseidon2-based 
    - `x` is range-checked to `[0, 2^250)` → `real_nf >= low`
    - `x_shifted` is range-checked to `[0, 2^250)` → `real_nf <= high`
 
-**Leaf authentication**: `high` is authenticated via `Poseidon2(low, high) → Merkle root` — a forged `high` produces the wrong root. No parity constraint needed; if the prover swaps (low, high), the interval check fails because `nf - low` wraps to a large field element.
+**Leaf authentication**: `high` is authenticated via `Poseidon(low, high) → Merkle root` — a forged `high` produces the wrong root. No parity constraint needed; if the prover swaps (low, high), the interval check fails because `nf - low` wraps to a large field element.
 
 **250-bit range bound assumption:** The 250-bit range check constrains bracket intervals to `< 2^250`. Since the Pallas field has order `p ≈ 2^254.9`, the IMT operator must pre-populate sentinel leaves at intervals of at most `2^250` to ensure every nullifier falls within a valid bracket. With ~17 evenly-spaced brackets (at multiples of `2^250`), the entire field is covered. The `SpacedLeafImtProvider` implements this strategy.
 
-**Constructions:** `Poseidon2Chip`, `LookupRangeCheckConfig`, `q_imt_swap`, `q_interval`, `q_per_note`.
+**Constructions:** `PoseidonChip`, `LookupRangeCheckConfig`, `q_imt_swap`, `q_interval`, `q_per_note`.
 
 ## 14. Governance Nullifier Publication (x4)
 
@@ -378,8 +378,7 @@ Gate layout: a single region with 6 rows (one per pair from C(4,2) = 6), each us
 | Chip / Gadget                     | Source             | Conditions               |
 | --------------------------------- | ------------------ | ------------------------ |
 | EccChip                           | halo2_gadgets      | 1, 2, 4, 5, 6, 9, 11, 12 |
-| PoseidonChip                      | halo2_gadgets      | 2, 3, 7, 12, 14          |
-| Poseidon2Chip                     | vendored           | 13                       |
+| PoseidonChip                      | halo2_gadgets      | 2, 3, 7, 12, 13, 14      |
 | SinsemillaChip (config 1)         | halo2_gadgets      | 1, 5, 9, 10              |
 | SinsemillaChip (config 2)         | halo2_gadgets      | 6, 10                    |
 | MerkleChip (configs 1+2)          | halo2_gadgets      | 10                       |

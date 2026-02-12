@@ -311,7 +311,7 @@ mod tests {
     use rand::rngs::OsRng;
 
     /// Merged circuit K value.
-    const K: u32 = 13;
+    const K: u32 = 14;
 
     /// Helper: create 1–4 real note inputs with a shared Merkle tree and anchor.
     ///
