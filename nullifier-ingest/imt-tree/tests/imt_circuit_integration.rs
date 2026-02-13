@@ -164,7 +164,8 @@ fn imt_proof_from_nullifier_tree_verifies_in_circuit() {
     let tree = build_sentinel_tree(&[
         pallas::Base::from(12345u64),
         pallas::Base::from(67890u64),
-    ]);
+    ])
+    .unwrap();
     let adapter = NullifierTreeAdapter(&tree);
 
     // 2. Create keys.
@@ -211,7 +212,8 @@ fn four_notes_with_nullifier_tree_verify_in_circuit() {
         pallas::Base::from(111u64),
         pallas::Base::from(222u64),
         pallas::Base::from(333u64),
-    ]);
+    ])
+    .unwrap();
     let adapter = NullifierTreeAdapter(&tree);
 
     let sk = SpendingKey::random(&mut rng);

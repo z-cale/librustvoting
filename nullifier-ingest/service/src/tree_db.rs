@@ -50,5 +50,5 @@ pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Range>> {
 /// field so that every gap range stays within this bound.
 pub fn tree_from_db(connection: &Connection) -> Result<NullifierTree> {
     let nfs = load_all_nullifiers(connection)?;
-    Ok(build_sentinel_tree(&nfs))
+    build_sentinel_tree(&nfs)
 }

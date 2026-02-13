@@ -432,7 +432,7 @@ fn test_duplicate_nullifiers_produce_same_tree() {
 
 #[test]
 fn test_sentinel_tree_all_ranges_under_2_250() {
-    let tree = build_sentinel_tree(&[]);
+    let tree = build_sentinel_tree(&[]).unwrap();
 
     let two_250 = Fp::from(2u64).pow([250, 0, 0, 0]);
 
@@ -452,7 +452,7 @@ fn test_sentinel_tree_all_ranges_under_2_250() {
 #[test]
 fn test_sentinel_tree_with_extra_nullifiers() {
     let extras = vec![fp(42), fp(1000000), fp(999999999)];
-    let tree = build_sentinel_tree(&extras);
+    let tree = build_sentinel_tree(&extras).unwrap();
 
     for nf in &extras {
         assert!(tree.prove(*nf).is_none(), "nullifier should be excluded");
@@ -464,7 +464,7 @@ fn test_sentinel_tree_with_extra_nullifiers() {
 
 #[test]
 fn test_proof_fields_match_tree() {
-    let tree = build_sentinel_tree(&[fp(42), fp(100)]);
+    let tree = build_sentinel_tree(&[fp(42), fp(100)]).unwrap();
     let value = fp(50);
 
     let proof = tree.prove(value).expect("value should be in a gap");
@@ -475,7 +475,7 @@ fn test_proof_fields_match_tree() {
 
 #[test]
 fn test_proof_rejects_wrong_value() {
-    let tree = build_sentinel_tree(&[fp(42), fp(100)]);
+    let tree = build_sentinel_tree(&[fp(42), fp(100)]).unwrap();
     let value = fp(50);
     let proof = tree.prove(value).expect("value should be in a gap");
 
@@ -486,7 +486,7 @@ fn test_proof_rejects_wrong_value() {
 #[test]
 fn test_e2e_sentinel_tree_proof_gen_and_verify() {
     let extra_nfs = vec![fp(12345), fp(67890), fp(111111)];
-    let tree = build_sentinel_tree(&extra_nfs);
+    let tree = build_sentinel_tree(&extra_nfs).unwrap();
 
     let test_value = fp(50000);
     assert!(tree.prove(test_value).is_some(), "test value should be in a gap range");
@@ -495,7 +495,7 @@ fn test_e2e_sentinel_tree_proof_gen_and_verify() {
     assert!(proof.verify(test_value));
     assert_eq!(proof.path.len(), TREE_DEPTH);
 
-    let tree2 = build_sentinel_tree(&extra_nfs);
+    let tree2 = build_sentinel_tree(&extra_nfs).unwrap();
     assert_eq!(tree.root(), tree2.root());
 }
 

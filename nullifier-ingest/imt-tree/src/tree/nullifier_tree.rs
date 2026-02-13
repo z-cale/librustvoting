@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::Result;
-use ff::Field;
+use ff::{Field, PrimeField as _};
 use pasta_curves::Fp;
 
 use super::{
@@ -35,7 +35,10 @@ impl NullifierTree {
     /// Build a tree from an iterator of nullifier field elements.
     ///
     /// The nullifiers need not be sorted -- they are sorted internally.
-    pub fn build(nfs: impl IntoIterator<Item = Fp>) -> Self {
+    ///
+    /// **Not public** -- use [`build_sentinel_tree`] to construct a tree
+    /// with the sentinel invariant required by the delegation circuit.
+    pub(crate) fn build(nfs: impl IntoIterator<Item = Fp>) -> Self {
         let mut nfs: Vec<Fp> = nfs.into_iter().collect();
         nfs.sort();
         let ranges = build_nf_ranges(nfs);
@@ -49,7 +52,10 @@ impl NullifierTree {
     }
 
     /// Build a tree from pre-computed gap ranges.
-    pub fn from_ranges(ranges: Vec<Range>) -> Self {
+    ///
+    /// **Not public** -- use [`build_sentinel_tree`] to construct a tree
+    /// with the sentinel invariant required by the delegation circuit.
+    pub(crate) fn from_ranges(ranges: Vec<Range>) -> Self {
         let t0 = Instant::now();
         let leaves = commit_ranges(&ranges);
         eprintln!("  Leaf hashing: {} leaves in {:.1}s", leaves.len(), t0.elapsed().as_secs_f64());
@@ -81,6 +87,30 @@ impl NullifierTree {
     /// Whether the tree has no ranges.
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
+    }
+
+    /// Verify that every gap range has width `< 2^250`.
+    ///
+    /// The delegation circuit's `q_interval` gate range-checks interval
+    /// widths to 250 bits. If any range exceeds this bound, proofs built
+    /// from this tree will silently fail the circuit check. This method
+    /// performs one subtraction per range -- cheap and definitive.
+    ///
+    /// Called automatically by [`build_sentinel_tree`]; you only need to
+    /// call this directly if you are loading a tree from an untrusted source.
+    pub fn verify_range_widths(&self) -> Result<()> {
+        for (i, &[low, high]) in self.ranges.iter().enumerate() {
+            let width = high - low;
+            // A value fits in 250 bits iff its big-endian byte 31 (the MSB
+            // of the little-endian repr) has its top two bits clear (< 0x04).
+            // Equivalently: the 256-bit repr must be < 2^250.
+            let repr = width.to_repr();
+            anyhow::ensure!(
+                repr.as_ref()[31] < 0x04,
+                "range {i} has width >= 2^250: low={low:?}, high={high:?}"
+            );
+        }
+        Ok(())
     }
 
     /// The leaf commitment hashes (level 0 of the tree).
@@ -155,12 +185,15 @@ impl NullifierTree {
 /// partitioning the Pallas field into 17 intervals each under 2^250 wide.
 /// Any additional nullifiers from `extra` are merged in.
 ///
-/// This is the required initialization for any tree whose proofs will be
-/// verified by the delegation circuit (condition 13), which range-checks
-/// interval widths to 250 bits.
-pub fn build_sentinel_tree(extra: &[Fp]) -> NullifierTree {
+/// This is the **only public constructor** for building a new tree. The
+/// sentinel invariant is verified before returning, so callers are
+/// guaranteed every gap range fits in 250 bits (as required by the
+/// delegation circuit's condition 13).
+pub fn build_sentinel_tree(extra: &[Fp]) -> Result<NullifierTree> {
     let step = Fp::from(2u64).pow([250, 0, 0, 0]);
     let mut nullifiers: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
     nullifiers.extend_from_slice(extra);
-    NullifierTree::build(nullifiers)
+    let tree = NullifierTree::build(nullifiers);
+    tree.verify_range_widths()?;
+    Ok(tree)
 }
