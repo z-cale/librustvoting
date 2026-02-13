@@ -9,7 +9,7 @@
 //! leaves are public), inserts them, and generates witnesses only for its own
 //! marked positions.
 
-use std::collections::BTreeSet;
+use std::fmt;
 
 use incrementalmerkletree::{Hashable, Level, Retention};
 use pasta_curves::Fp;
@@ -18,6 +18,67 @@ use shardtree::{store::memory::MemoryShardStore, ShardTree};
 use crate::hash::{MerkleHashVote, MAX_CHECKPOINTS, SHARD_HEIGHT, TREE_DEPTH};
 use crate::path::MerklePath;
 use crate::sync_api::TreeSyncApi;
+
+// ---------------------------------------------------------------------------
+// SyncError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during [`TreeClient::sync`].
+#[derive(Debug)]
+pub enum SyncError<E: fmt::Debug> {
+    /// Error from the underlying [`TreeSyncApi`] transport.
+    Api(E),
+    /// Block's `start_index` doesn't match the client's expected next position.
+    ///
+    /// This indicates missed or duplicated blocks, wrong ordering, or a
+    /// protocol-level desync between server and client.
+    StartIndexMismatch {
+        height: u32,
+        expected: u64,
+        got: u64,
+    },
+    /// Client's computed root doesn't match the server's root at a block height.
+    ///
+    /// This indicates corrupted leaf data, a hash mismatch, or a
+    /// different tree implementation between server and client.
+    RootMismatch {
+        height: u32,
+        local: Option<Fp>,
+        server: Fp,
+    },
+}
+
+impl<E: fmt::Debug> fmt::Display for SyncError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SyncError::Api(e) => write!(f, "sync API error: {:?}", e),
+            SyncError::StartIndexMismatch {
+                height,
+                expected,
+                got,
+            } => write!(
+                f,
+                "start_index mismatch at height {}: expected {}, got {}",
+                height, expected, got
+            ),
+            SyncError::RootMismatch {
+                height,
+                local,
+                server,
+            } => write!(
+                f,
+                "root mismatch at height {}: local={:?}, server={:?}",
+                height, local, server
+            ),
+        }
+    }
+}
+
+impl<E: fmt::Debug> From<E> for SyncError<E> {
+    fn from(err: E) -> Self {
+        SyncError::Api(err)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TreeClient
@@ -39,11 +100,6 @@ pub struct TreeClient {
     next_position: u64,
     /// Latest synced block height.
     last_synced_height: Option<u32>,
-    /// Positions the client wants witnesses for.
-    ///
-    /// In the POC, all positions are marked during sync for simplicity.
-    /// In production, only the client's own positions would be marked.
-    marked_positions: BTreeSet<u64>,
 }
 
 impl TreeClient {
@@ -53,17 +109,7 @@ impl TreeClient {
             inner: ShardTree::new(MemoryShardStore::empty(), MAX_CHECKPOINTS),
             next_position: 0,
             last_synced_height: None,
-            marked_positions: BTreeSet::new(),
         }
-    }
-
-    /// Mark a leaf position for future witness generation.
-    ///
-    /// Call this to record which positions the client needs witnesses for.
-    /// In the POC, all positions are marked during sync regardless, but this
-    /// method is provided for API completeness and future optimization.
-    pub fn mark_position(&mut self, position: u64) {
-        self.marked_positions.insert(position);
     }
 
     /// Sync the client tree from a [`TreeSyncApi`] source.
@@ -72,10 +118,15 @@ impl TreeClient {
     /// synced height) and inserts them into the local tree. Each block's leaves
     /// are checkpointed at the block's height.
     ///
+    /// **Safety checks** (these catch corrupted data or protocol mismatches):
+    /// - Each block's `start_index` must match the client's expected next position.
+    /// - After checkpointing each block, the client's root is verified against the
+    ///   server's root at that height (the consistency check described in the README).
+    ///
     /// In the POC, all leaves are inserted with `Retention::Marked` so witnesses
-    /// can be generated for any position. In production, only positions in
-    /// `marked_positions` would be marked, and the rest would be ephemeral.
-    pub fn sync<A: TreeSyncApi>(&mut self, api: &A) -> Result<(), A::Error> {
+    /// can be generated for any position. In production, only the client's own
+    /// positions would be marked; all others would use `Retention::Ephemeral`.
+    pub fn sync<A: TreeSyncApi>(&mut self, api: &A) -> Result<(), SyncError<A::Error>> {
         let state = api.get_tree_state()?;
         let from_height = self.last_synced_height.map(|h| h + 1).unwrap_or(1);
         let to_height = state.height;
@@ -87,9 +138,21 @@ impl TreeClient {
         let blocks = api.get_block_commitments(from_height, to_height)?;
 
         for block in &blocks {
+            // Validate start_index continuity: the block's first leaf index must
+            // match exactly where the client expects the next leaf. A mismatch
+            // means missed blocks, duplicates, or wrong ordering.
+            if !block.leaves.is_empty() && block.start_index != self.next_position {
+                return Err(SyncError::StartIndexMismatch {
+                    height: block.height,
+                    expected: self.next_position,
+                    got: block.start_index,
+                });
+            }
+
             for leaf in &block.leaves {
                 // POC: mark all leaves so witnesses work for any position.
-                // Production: use Retention::Marked only for marked_positions.
+                // TODO(production): use Retention::Marked only for the client's
+                // own positions; use Retention::Ephemeral for all others.
                 self.inner
                     .append(*leaf, Retention::Marked)
                     .expect("append must succeed (tree not full)");
@@ -102,6 +165,21 @@ impl TreeClient {
                 .checkpoint(block.height)
                 .expect("checkpoint must succeed");
             self.last_synced_height = Some(block.height);
+
+            // Root consistency check: verify the client's computed root matches
+            // the server's root at this height. This catches corrupted leaf data,
+            // hash mismatches, or tree implementation differences.
+            let server_root = api.get_root_at_height(block.height)?;
+            if let Some(expected) = server_root {
+                let local = self.root_at_height(block.height);
+                if local != Some(expected) {
+                    return Err(SyncError::RootMismatch {
+                        height: block.height,
+                        local,
+                        server: expected,
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -154,10 +232,5 @@ impl TreeClient {
     /// Latest synced block height.
     pub fn last_synced_height(&self) -> Option<u32> {
         self.last_synced_height
-    }
-
-    /// Whether the given position has been marked for witness generation.
-    pub fn is_marked(&self, position: u64) -> bool {
-        self.marked_positions.contains(&position)
     }
 }

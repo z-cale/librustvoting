@@ -35,9 +35,9 @@ pub mod sync_api;
 // -- Re-exports (public API) -----------------------------------------------
 
 pub use anchor::Anchor;
-pub use client::TreeClient;
+pub use client::{SyncError, TreeClient};
 pub use hash::{MerkleHashVote, TREE_DEPTH};
-pub use path::MerklePath;
+pub use path::{MerklePath, MERKLE_PATH_BYTES};
 pub use server::TreeServer;
 pub use sync_api::TreeSyncApi;
 

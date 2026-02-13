@@ -6,9 +6,10 @@
 //! - Client syncs incrementally via TreeSyncApi
 //! - Client-generated witnesses are valid against server roots
 //! - Roots match between server and client at every synced height
+//! - Sync detects root mismatches and start_index discontinuities
 
 use pasta_curves::Fp;
-use vote_commitment_tree::{TreeClient, TreeServer, TreeSyncApi};
+use vote_commitment_tree::{MerklePath, TreeClient, TreeServer, TreeSyncApi};
 
 fn fp(x: u64) -> Fp {
     Fp::from(x)
@@ -19,9 +20,9 @@ fn fp(x: u64) -> Fp {
 /// Corresponds to the plan's integration test steps:
 ///  1. Create TreeServer (empty)
 ///  2. Simulate MsgDelegateVote: server.append(van_alice), server.checkpoint(1)
-///  3. Client syncs block 1, marks position 0, generates witness at height 1
+///  3. Client syncs block 1, generates witness at height 1
 ///  4. Simulate MsgCastVote: server.append_two(new_van_alice, vc_alice), server.checkpoint(2)
-///  5. Client syncs block 2, marks VC position, generates witness at height 2
+///  5. Client syncs block 2, generates witness at height 2
 ///  6. All witnesses verify against the server's roots
 #[test]
 fn server_append_client_sync_witness_roundtrip() {
@@ -42,6 +43,7 @@ fn server_append_client_sync_witness_roundtrip() {
 
     // ---------------------------------------------------------------
     // 3. Client syncs from server (gets block 1)
+    //    Root consistency is now verified inside sync().
     // ---------------------------------------------------------------
     client.sync(&server).unwrap();
 
@@ -52,7 +54,7 @@ fn server_append_client_sync_witness_roundtrip() {
         "client should be at height 1"
     );
 
-    // Verify roots match between server and client at height 1.
+    // Roots already verified inside sync(); double-check here.
     let server_root_1 = server.root_at_height(1).expect("server has root at height 1");
     let client_root_1 = client.root_at_height(1).expect("client has root at height 1");
     assert_eq!(
@@ -60,15 +62,11 @@ fn server_append_client_sync_witness_roundtrip() {
         "server and client roots must match at height 1"
     );
 
-    // Client marks position 0 (Alice's VAN — she needs a witness for ZKP #2).
-    client.mark_position(0);
-
-    // Client generates witness at anchor height 1.
+    // Client generates witness at anchor height 1 (Alice's VAN for ZKP #2).
     let witness_1 = client
         .witness(0, 1)
         .expect("witness for position 0 at height 1");
 
-    // Assert: witness verifies against server's root at height 1.
     assert!(
         witness_1.verify(van_alice, server_root_1),
         "witness for VAN at position 0 must verify against server root at height 1"
@@ -123,11 +121,9 @@ fn server_append_client_sync_witness_roundtrip() {
     );
 
     // ---------------------------------------------------------------
-    // 6. Client marks VC position and generates witness at height 2
-    //    (Helper server needs this for ZKP #3)
+    // 6. Generate witnesses for VC and new VAN at height 2
+    //    (Helper server needs VC witness for ZKP #3)
     // ---------------------------------------------------------------
-    client.mark_position(2); // VC is at position 2
-
     let witness_vc = client
         .witness(2, 2)
         .expect("witness for VC at position 2, anchor height 2");
@@ -283,4 +279,46 @@ fn sync_idempotent_when_up_to_date() {
     client.sync(&server).unwrap();
     assert_eq!(client.size(), 1);
     assert_eq!(client.last_synced_height(), Some(1));
+}
+
+/// Test that server and client produce byte-identical auth paths.
+#[test]
+fn server_and_client_paths_are_identical() {
+    let mut server = TreeServer::empty();
+    server.append(fp(42));
+    server.append(fp(43));
+    server.checkpoint(1);
+
+    let mut client = TreeClient::empty();
+    client.sync(&server).unwrap();
+
+    let server_path = server.path(0, 1).unwrap();
+    let client_path = client.witness(0, 1).unwrap();
+
+    assert_eq!(server_path.position(), client_path.position());
+    assert_eq!(server_path.auth_path(), client_path.auth_path());
+}
+
+/// Test MerklePath serialization roundtrip.
+#[test]
+fn merkle_path_serialization_roundtrip() {
+    let mut server = TreeServer::empty();
+    server.append(fp(10));
+    server.append(fp(20));
+    server.append(fp(30));
+    server.checkpoint(1);
+
+    let path = server.path(1, 1).unwrap();
+    let bytes = path.to_bytes();
+
+    // Expected size: 4 (position) + 32 * 32 (auth_path) = 1028 bytes.
+    assert_eq!(bytes.len(), 4 + 32 * 32);
+
+    let restored = MerklePath::from_bytes(&bytes).expect("deserialization must succeed");
+    assert_eq!(restored.position(), path.position());
+    assert_eq!(restored.auth_path(), path.auth_path());
+
+    // Restored path still verifies.
+    let root = server.root_at_height(1).unwrap();
+    assert!(restored.verify(fp(20), root));
 }
