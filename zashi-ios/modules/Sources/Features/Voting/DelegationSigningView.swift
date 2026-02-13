@@ -159,6 +159,22 @@ struct DelegationSigningView: View {
                         : Design.Text.tertiary
                     )
 
+                if let timing = store.witnessTiming {
+                    timingBreakdown(timing)
+                }
+
+                Button {
+                    store.send(.rerunWitnessVerification)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11))
+                        Text("Re-verify (invalidate cache)")
+                            .zFont(.medium, size: 12, style: Design.Text.tertiary)
+                    }
+                }
+                .padding(.top, 4)
+
             case .failed(let error):
                 HStack(spacing: 6) {
                     Image(systemName: "xmark.circle.fill")
@@ -192,6 +208,33 @@ struct DelegationSigningView: View {
             Text(result.verified ? "PASS" : "FAIL")
                 .zFont(.semiBold, size: 12, style: Design.Text.primary)
                 .foregroundStyle(result.verified ? .green : .red)
+        }
+    }
+
+    @ViewBuilder
+    private func timingBreakdown(_ timing: Voting.State.WitnessTiming) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            timingRow("Tree state fetch", ms: timing.treeStateFetchMs)
+            timingRow("Witness generation", ms: timing.witnessGenerationMs)
+            timingRow("Verification", ms: timing.verificationMs)
+            Divider()
+            timingRow("Total", ms: timing.totalMs)
+        }
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Design.Inputs.Filled.bg.color(colorScheme))
+        }
+    }
+
+    @ViewBuilder
+    private func timingRow(_ label: String, ms: UInt64) -> some View {
+        HStack {
+            Text(label)
+                .zFont(size: 12, style: Design.Text.tertiary)
+            Spacer()
+            Text(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000.0) : "\(ms)ms")
+                .zFont(.medium, size: 12, style: Design.Text.primary)
         }
     }
 

@@ -66,6 +66,13 @@ public struct Voting {
             case failed(String)
         }
 
+        public struct WitnessTiming: Equatable {
+            public let treeStateFetchMs: UInt64
+            public let witnessGenerationMs: UInt64
+            public let verificationMs: UInt64
+            public var totalMs: UInt64 { treeStateFetchMs + witnessGenerationMs + verificationMs }
+        }
+
         public var screenStack: [Screen] = [.delegationSigning]
         public var votingRound: VotingRound
         public var votes: [UInt32: VoteChoice] = [:]
@@ -92,6 +99,8 @@ public struct Voting {
         public var witnessStatus: WitnessStatus = .notStarted
         /// Cached witness data from verification, used as inclusion proofs for delegation proof.
         public var cachedWitnesses: [WitnessData] = []
+        /// Timing breakdown from the last witness generation run.
+        public var witnessTiming: WitnessTiming?
 
         // ZKP #1 (delegation) — runs in background
         public var delegationProofStatus: ProofStatus = .notStarted
@@ -182,7 +191,8 @@ public struct Voting {
 
         // Witness verification
         case verifyWitnesses
-        case witnessVerificationCompleted([State.NoteWitnessResult], [WitnessData])
+        case rerunWitnessVerification
+        case witnessVerificationCompleted([State.NoteWitnessResult], [WitnessData], State.WitnessTiming)
         case witnessVerificationFailed(String)
 
         // Delegation signing
@@ -297,38 +307,54 @@ public struct Voting {
             // MARK: - Witness Verification
 
             case .verifyWitnesses:
-                guard !state.walletNotes.isEmpty else {
-                    state.witnessStatus = .completed
+                guard let activeSession = state.activeSession else {
+                    state.witnessStatus = .failed("missing active session")
                     return .none
                 }
                 state.witnessStatus = .inProgress
-                let roundId = state.roundId
-                let snapshotHeight = state.votingRound.snapshotHeight
+                state.witnessTiming = nil
+                let roundId = activeSession.voteRoundId.hexString
+                let snapshotHeight = activeSession.snapshotHeight
                 let notes = state.walletNotes
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 return .run { [sdkSynchronizer, votingCrypto] send in
-                    // Initialize the round in the voting DB so we can store tree state
+                    // Always initialize the round in the DB (needed by delegation proof later)
                     try? await votingCrypto.clearRound(roundId)
                     let params = VotingRoundParams(
-                        voteRoundId: Data(repeating: 0x01, count: 32),
+                        voteRoundId: activeSession.voteRoundId,
                         snapshotHeight: snapshotHeight,
-                        eaPK: Data(repeating: 0xEA, count: 32),
-                        ncRoot: Data(repeating: 0xAA, count: 32),
-                        nullifierIMTRoot: Data(repeating: 0xBB, count: 32)
+                        eaPK: activeSession.eaPK,
+                        ncRoot: activeSession.ncRoot,
+                        nullifierIMTRoot: activeSession.nullifierIMTRoot
                     )
                     try await votingCrypto.initRound(params, nil)
 
-                    // Fetch tree state from lightwalletd at snapshot height
+                    // Skip witness pipeline if wallet has no notes at snapshot height
+                    guard !notes.isEmpty else {
+                        await send(.witnessVerificationCompleted([], [], Voting.State.WitnessTiming(
+                            treeStateFetchMs: 0, witnessGenerationMs: 0, verificationMs: 0
+                        )))
+                        return
+                    }
+
+                    // Phase 1: Fetch tree state from lightwalletd
+                    let t0 = ContinuousClock.now
                     let treeStateBytes = try await sdkSynchronizer.getTreeState(snapshotHeight)
                     try await votingCrypto.storeTreeState(roundId, treeStateBytes)
-                    print("[Voting] Stored tree state at height \(snapshotHeight)")
+                    let t1 = ContinuousClock.now
+                    let fetchMs = UInt64(t0.duration(to: t1).components.seconds * 1000)
+                        + UInt64(t0.duration(to: t1).components.attoseconds / 1_000_000_000_000_000)
+                    print("[Voting] Tree state fetch: \(fetchMs)ms")
 
-                    // Generate witnesses (includes verification on the Rust side)
+                    // Phase 2: Generate witnesses (includes Rust-side verification)
                     let witnesses = try await votingCrypto.generateNoteWitnesses(roundId, walletDbPath, notes)
-                    print("[Voting] Generated \(witnesses.count) witnesses")
+                    let t2 = ContinuousClock.now
+                    let genMs = UInt64(t1.duration(to: t2).components.seconds * 1000)
+                        + UInt64(t1.duration(to: t2).components.attoseconds / 1_000_000_000_000_000)
+                    print("[Voting] Witness generation: \(genMs)ms (\(witnesses.count) notes)")
 
-                    // Verify each witness on the Swift side for UI display
+                    // Phase 3: Verify each witness on Swift side for UI display
                     var results: [Voting.State.NoteWitnessResult] = []
                     for (i, witness) in witnesses.enumerated() {
                         let verified = (try? await votingCrypto.verifyWitness(witness)) ?? false
@@ -336,15 +362,34 @@ public struct Voting {
                         results.append(.init(position: note.position, value: note.value, verified: verified))
                         print("[Voting] Note pos=\(note.position) value=\(note.value) verified=\(verified)")
                     }
-                    await send(.witnessVerificationCompleted(results, witnesses))
+                    let t3 = ContinuousClock.now
+                    let verifyMs = UInt64(t2.duration(to: t3).components.seconds * 1000)
+                        + UInt64(t2.duration(to: t3).components.attoseconds / 1_000_000_000_000_000)
+                    print("[Voting] Swift verification: \(verifyMs)ms")
+                    print("[Voting] Total witness pipeline: \(fetchMs + genMs + verifyMs)ms")
+
+                    let timing = Voting.State.WitnessTiming(
+                        treeStateFetchMs: fetchMs,
+                        witnessGenerationMs: genMs,
+                        verificationMs: verifyMs
+                    )
+                    await send(.witnessVerificationCompleted(results, witnesses, timing))
                 } catch: { error, send in
                     print("[Voting] Witness verification failed: \(error)")
                     await send(.witnessVerificationFailed(error.localizedDescription))
                 }
 
-            case .witnessVerificationCompleted(let results, let witnesses):
+            case .rerunWitnessVerification:
+                // Invalidate cached witnesses and re-run from scratch
+                state.noteWitnessResults = []
+                state.cachedWitnesses = []
+                state.witnessTiming = nil
+                return .send(.verifyWitnesses)
+
+            case .witnessVerificationCompleted(let results, let witnesses, let timing):
                 state.noteWitnessResults = results
                 state.cachedWitnesses = witnesses
+                state.witnessTiming = timing
                 state.witnessStatus = .completed
                 return .none
 
