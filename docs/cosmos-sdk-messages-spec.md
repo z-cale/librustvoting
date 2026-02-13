@@ -127,7 +127,7 @@ message VotingSession {
   int64   vote_end_time         = 5;  // unix timestamp
 
   // Pre-processing parameters (Phase 0.2)
-  bytes   nullifier_imt_root    = 6;  // Poseidon2 IMT root of all Orchard nullifiers at snapshot
+  bytes   nullifier_imt_root    = 6;  // Poseidon IMT root of all Orchard nullifiers at snapshot
   bytes   nc_root               = 7;  // Note commitment tree root at snapshot (anchor)
 
   // Election authority (Phase 0.5)
@@ -244,7 +244,7 @@ message MsgCreateVotingSession {
   int64   vote_end_time         = 5; // Unix timestamp
 
   // Pre-processing roots (Phase 0.2)
-  bytes   nullifier_imt_root    = 6; // Poseidon2 IMT root
+  bytes   nullifier_imt_root    = 6; // Poseidon IMT root
   bytes   nc_root               = 7; // Note commitment tree anchor
 
   // Election authority key (Phase 0.5)

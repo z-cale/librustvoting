@@ -8,8 +8,5 @@
 pub mod builder;
 pub mod circuit;
 pub mod imt;
-pub mod poseidon2;
-pub mod poseidon2_chip;
-pub mod poseidon2_params;
 
 pub use circuit::{Circuit, Instance};

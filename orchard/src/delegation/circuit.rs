@@ -77,16 +77,7 @@ use halo2_gadgets::{
         lookup_range_check::LookupRangeCheckConfig,
     },
 };
-use lazy_static::lazy_static;
-
 use super::imt::IMT_DEPTH;
-use super::poseidon2::Poseidon2Params;
-use super::poseidon2_chip::{Poseidon2Chip, Poseidon2Config};
-
-// Parsed once and reused to avoid per-note constant parsing in condition 13.
-lazy_static! {
-    static ref POSEIDON2_PARAMS: Poseidon2Params<pallas::Base> = Poseidon2Params::new();
-}
 
 // ================================================================
 // Public input offsets (12 field elements).
@@ -227,7 +218,7 @@ pub struct Config {
     q_per_note: Selector,
     // IMT conditional swap gate selector (condition 13).
     // At each of the 29 IMT Merkle levels, swaps (current, sibling) into (left, right)
-    // based on the position bit before Poseidon hashing.
+    // based on the position bit before Poseidon hashing (condition 13).
     q_imt_swap: Selector,
     // Interval check gate selector (condition 13).
     // Proves low <= real_nf <= high by constraining x and x_shifted
@@ -237,8 +228,6 @@ pub struct Config {
     // For each of the 6 pairs (i,j), constrains (gov_null_i - gov_null_j) * inv = 1,
     // which is unsatisfiable when two gov nullifiers are equal.
     q_gov_null_distinct: Selector,
-    // Poseidon2 chip config — used for IMT Merkle hashing (condition 13).
-    poseidon2_config: Poseidon2Config<pallas::Base>,
 }
 
 impl Config {
@@ -296,10 +285,6 @@ impl Config {
 
     fn range_check_config(&self) -> LookupRangeCheckConfig<pallas::Base, 10> {
         self.range_check
-    }
-
-    fn poseidon2_chip(&self) -> Poseidon2Chip<pallas::Base> {
-        Poseidon2Chip::construct(self.poseidon2_config.clone())
     }
 }
 
@@ -663,9 +648,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let new_note_commit_config =
             NoteCommitChip::configure(meta, advices, sinsemilla_config_2.clone());
 
-        // Poseidon2 chip for IMT Merkle hashing (condition 13).
-        let poseidon2_config = Poseidon2Chip::<pallas::Base>::configure(meta);
-
         Config {
             primary,
             advices,
@@ -684,7 +666,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             q_imt_swap,
             q_interval,
             q_gov_null_distinct,
-            poseidon2_config,
         }
     }
 
@@ -1712,7 +1693,7 @@ fn synthesize_note_slot(
     // stores an explicit interval [low, high].
     //
     // The proof has three parts:
-    //   1. Leaf hash: Poseidon2(low, high)
+    //   1. Leaf hash: Poseidon(low, high)
     //   2. Merkle path: 29 levels from the leaf hash to the root.
     //   3. Interval check: low <= real_nf <= high, proved by
     //      range-checking x and x_shifted to [0, 2^250).
@@ -1730,19 +1711,20 @@ fn synthesize_note_slot(
         note.imt_high,
     )?;
 
-    // Compute leaf hash: Poseidon2(low, high).
+    // Compute leaf hash: Poseidon(low, high).
     let leaf_hash = {
-        let poseidon2 = config.poseidon2_chip();
-        poseidon2.hash(
-            &mut layouter.namespace(|| format!("note {s} Poseidon2(low, high)")),
-            &[imt_low.clone(), imt_high.clone()],
-            &POSEIDON2_PARAMS,
+        let poseidon_hasher = PoseidonHash::<
+            pallas::Base, _, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2
+        >::init(config.poseidon_chip(), layouter.namespace(|| format!("note {s} imt leaf hash init")))?;
+        poseidon_hasher.hash(
+            layouter.namespace(|| format!("note {s} Poseidon(low, high)")),
+            [imt_low.clone(), imt_high.clone()],
         )?
     };
 
-    // Poseidon2 Merkle path from leaf_hash, 29 levels.
+    // Poseidon Merkle path from leaf_hash, 29 levels.
     // At each level, q_imt_swap orders (current, sibling) by position bit,
-    // then Poseidon2(left, right) computes the parent.
+    // then Poseidon(left, right) computes the parent.
     let mut current = leaf_hash;
 
     for i in 0..IMT_DEPTH {
@@ -1810,11 +1792,12 @@ fn synthesize_note_slot(
         )?;
 
         let parent = {
-            let poseidon2 = config.poseidon2_chip();
-            poseidon2.hash(
-                &mut layouter.namespace(|| format!("note {s} Poseidon2(left, right) level {i}")),
-                &[left, right],
-                &POSEIDON2_PARAMS,
+            let poseidon_hasher = PoseidonHash::<
+                pallas::Base, _, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2
+            >::init(config.poseidon_chip(), layouter.namespace(|| format!("note {s} imt path hash init level {i}")))?;
+            poseidon_hasher.hash(
+                layouter.namespace(|| format!("note {s} Poseidon(left, right) level {i}")),
+                [left, right],
             )?
         };
         current = parent;
@@ -2053,8 +2036,9 @@ mod tests {
 
     /// Size of the delegation circuit (2^K rows).
     ///
-    /// K=13 (8,192 rows) fits all conditions including 4 per-note slots.
-    const K: u32 = 13;
+    /// K=14 (16,384 rows) fits all conditions including 4 per-note slots.
+    /// (Poseidon IMT hashing requires more rows than the former Poseidon2 chip.)
+    const K: u32 = 14;
 
     /// Helper: build a NoteSlotWitness for a note with a Merkle path and IMT proof.
     fn make_note_slot(
@@ -2796,8 +2780,8 @@ mod tests {
                     let top = rest.split('/').next().unwrap_or(rest);
                     let top = if top.starts_with("MerkleCRH(") {
                         "Merkle path (Sinsemilla)"
-                    } else if top.starts_with("Poseidon2(left, right) level") {
-                        "IMT Poseidon2 path"
+                    } else if top.starts_with("Poseidon(left, right) level") {
+                        "IMT Poseidon path"
                     } else if top.starts_with("imt swap level") {
                         "IMT swap"
                     } else {
