@@ -2,7 +2,7 @@
 # Top-level Makefile — delegates to imt-tree and service subcrates
 
 IMT_DIR     := imt-tree
-SERVICE_DIR := service
+SERVICE_DIR := nullifier-tree
 
 # ── Configuration (override with env vars) ───────────────────────────
 DB_PATH    ?= nullifiers.db

@@ -5,6 +5,7 @@ use anyhow::Result;
 use ff::{Field, PrimeField as _};
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3, Spec};
 use pasta_curves::Fp;
+use rayon::prelude::*;
 use rusqlite::Connection;
 
 /// Depth of the nullifier range Merkle tree.
@@ -216,10 +217,11 @@ impl PoseidonHasher {
 
 /// Hash each `(low, high)` range pair into a single leaf commitment.
 pub fn commit_ranges(ranges: &[Range]) -> Vec<Fp> {
-    let hasher = PoseidonHasher::new();
     ranges
-        .iter()
-        .map(|[low, high]| hasher.hash(*low, *high))
+        .par_iter()
+        .map_init(PoseidonHasher::new, |hasher, [low, high]| {
+            hasher.hash(*low, *high)
+        })
         .collect()
 }
 
@@ -266,14 +268,22 @@ fn build_levels(leaves: &[Fp], empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
     }
     levels.push(layer);
 
+    // Minimum number of pairs before we dispatch to Rayon.
+    const PAR_THRESHOLD: usize = 1024;
+
     // Hash pairs at each level to produce the next.
     for i in 0..TREE_DEPTH - 1 {
         let prev = &levels[i];
         let pairs = prev.len() / 2;
-        let mut next = Vec::with_capacity(pairs + 1);
-        for j in 0..pairs {
-            next.push(hasher.hash(prev[j * 2], prev[j * 2 + 1]));
-        }
+        let mut next: Vec<Fp> = if pairs >= PAR_THRESHOLD {
+            prev.par_chunks_exact(2)
+                .map_init(PoseidonHasher::new, |h, pair| h.hash(pair[0], pair[1]))
+                .collect()
+        } else {
+            (0..pairs)
+                .map(|j| hasher.hash(prev[j * 2], prev[j * 2 + 1]))
+                .collect()
+        };
         if next.len() & 1 == 1 {
             next.push(empty[i + 1]);
         }
