@@ -67,7 +67,7 @@ public struct VotingCryptoClient {
         _ choice: VoteChoice,
         _ encShares: [EncryptedShare],
         _ vanWitness: Data
-    ) -> AsyncThrowingStream<ProofEvent, Error>
+    ) -> AsyncThrowingStream<VoteCommitmentBuildEvent, Error>
         = { _, _, _, _, _ in AsyncThrowingStream { $0.finish() } }
     public var buildSharePayloads: @Sendable (
         _ encShares: [EncryptedShare],

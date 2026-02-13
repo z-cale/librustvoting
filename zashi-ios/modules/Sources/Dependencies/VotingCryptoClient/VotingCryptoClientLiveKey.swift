@@ -19,6 +19,19 @@ private final class StreamProgressReporter: ZcashVotingFFI.ProofProgressReporter
     }
 }
 
+/// Bridges UniFFI ProofProgressReporter callback for vote commitment streams.
+private final class VoteCommitmentProgressReporter: ZcashVotingFFI.ProofProgressReporter {
+    let continuation: AsyncThrowingStream<VoteCommitmentBuildEvent, Error>.Continuation
+
+    init(_ continuation: AsyncThrowingStream<VoteCommitmentBuildEvent, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func onProgress(progress: Double) {
+        continuation.yield(.progress(progress))
+    }
+}
+
 // MARK: - Live key
 
 extension VotingCryptoClient: DependencyKey {
@@ -249,7 +262,7 @@ extension VotingCryptoClient: DependencyKey {
                     Task.detached {
                         do {
                             let db = try await dbActor.database()
-                            let reporter = StreamProgressReporter(continuation)
+                            let reporter = VoteCommitmentProgressReporter(continuation)
                             let ffiShares = encShares.map {
                                 ZcashVotingFFI.EncryptedShare(
                                     c1: $0.c1,
@@ -273,10 +286,14 @@ extension VotingCryptoClient: DependencyKey {
                                 voteCommitment: result.voteCommitment,
                                 proposalId: proposalId,
                                 proof: result.proof,
+                                // TODO(gov-steps-phase-3-voting): Source this from canonical
+                                // round metadata once MsgCastVote fields are fully wired.
                                 voteRoundId: Data(repeating: 0, count: 32),
+                                // TODO(gov-steps-phase-3-voting): Replace with vote commitment
+                                // tree anchor height, not a local placeholder.
                                 voteCommTreeAnchorHeight: 0
                             )
-                            continuation.yield(.completed(bundle.proof))
+                            continuation.yield(.completed(bundle))
                             continuation.finish()
                         } catch {
                             continuation.finish(throwing: error)

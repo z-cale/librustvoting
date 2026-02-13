@@ -452,3 +452,10 @@ public enum ProofEvent: Equatable, Sendable {
     case progress(Double)
     case completed(Data)
 }
+
+/// Streaming events for vote commitment build (ZKP #2).
+/// Keeps bundle payloads separate from generic proof streams used elsewhere.
+public enum VoteCommitmentBuildEvent: Equatable, Sendable {
+    case progress(Double)
+    case completed(VoteCommitmentBundle)
+}
