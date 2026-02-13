@@ -35,7 +35,8 @@ For payloads that need multi-frame encoding. Input is hex, `--ur-type` sets the 
 
 ```
 swift run keystone-qr display --ur-type bytes "deadbeefcafebabe..."
-swift run keystone-qr display --ur-type bytes --fragment-len 100 --interval 150 "$(head -c 512 /dev/urandom | xxd -p | tr -d '\n')"
+HEX=$(head -c 512 /dev/urandom | xxd -p | tr -d '\n')
+swift run keystone-qr display --ur-type bytes --fragment-len 100 --interval 150 "$HEX"
 ```
 
 - `--ur-type` — UR type identifier (triggers animated mode)
@@ -73,7 +74,8 @@ Display in one terminal, scan from screen in another:
 
 ```
 # Terminal 1: display animated QR
-swift run keystone-qr display --ur-type bytes "$(head -c 512 /dev/urandom | xxd -p | tr -d '\n')"
+HEX=$(head -c 512 /dev/urandom | xxd -p | tr -d '\n')
+swift run keystone-qr display --ur-type bytes "$HEX"
 
 # Terminal 2: scan from screen
 swift run keystone-qr scan --screen
