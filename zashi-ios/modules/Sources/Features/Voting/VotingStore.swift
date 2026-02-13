@@ -5,6 +5,7 @@ import DatabaseFiles
 import Generated
 import MnemonicClient
 import Pasteboard
+import SDKSynchronizer
 import UIComponents
 import Utils
 import VotingAPIClient
@@ -32,6 +33,7 @@ public struct Voting {
     @Dependency(\.databaseFiles) var databaseFiles
     @Dependency(\.mnemonic) var mnemonic
     @Dependency(\.pasteboard) var pasteboard
+    @Dependency(\.sdkSynchronizer) var sdkSynchronizer
     @Dependency(\.votingAPI) var votingAPI
     @Dependency(\.votingCrypto) var votingCrypto
     @Dependency(\.walletStorage) var walletStorage
@@ -48,6 +50,20 @@ public struct Voting {
         public struct PendingVote: Equatable {
             public var proposalId: UInt32
             public var choice: VoteChoice
+        }
+
+        public struct NoteWitnessResult: Equatable, Identifiable {
+            public var id: UInt64 { position }
+            public let position: UInt64
+            public let value: UInt64
+            public let verified: Bool
+        }
+
+        public enum WitnessStatus: Equatable {
+            case notStarted
+            case inProgress
+            case completed
+            case failed(String)
         }
 
         public var screenStack: [Screen] = [.delegationSigning]
@@ -70,6 +86,12 @@ public struct Voting {
 
         // Vote awaiting user confirmation in detail view
         public var pendingVote: PendingVote?
+
+        // Witness verification results
+        public var noteWitnessResults: [NoteWitnessResult] = []
+        public var witnessStatus: WitnessStatus = .notStarted
+        /// Cached witness data from verification, used as inclusion proofs for delegation proof.
+        public var cachedWitnesses: [WitnessData] = []
 
         // ZKP #1 (delegation) — runs in background
         public var delegationProofStatus: ProofStatus = .notStarted
@@ -157,6 +179,11 @@ public struct Voting {
 
         // DB state stream (single source of truth)
         case votingDbStateChanged(VotingDbState)
+
+        // Witness verification
+        case verifyWitnesses
+        case witnessVerificationCompleted([State.NoteWitnessResult], [WitnessData])
+        case witnessVerificationFailed(String)
 
         // Delegation signing
         case copyHotkeyAddress
@@ -257,7 +284,7 @@ public struct Voting {
             case .votingWeightLoaded(let weight, let notes):
                 state.votingWeight = weight
                 state.walletNotes = notes
-                return .none
+                return .send(.verifyWitnesses)
 
             case .initializeFailed(let error):
                 print("[Voting] Initialization error: \(error)")
@@ -265,6 +292,64 @@ public struct Voting {
 
             case .hotkeyLoaded(let address):
                 state.hotkeyAddress = address
+                return .none
+
+            // MARK: - Witness Verification
+
+            case .verifyWitnesses:
+                guard !state.walletNotes.isEmpty else {
+                    state.witnessStatus = .completed
+                    return .none
+                }
+                state.witnessStatus = .inProgress
+                let roundId = state.roundId
+                let snapshotHeight = state.votingRound.snapshotHeight
+                let notes = state.walletNotes
+                let network = zcashSDKEnvironment.network
+                let walletDbPath = databaseFiles.dataDbURLFor(network).path
+                return .run { [sdkSynchronizer, votingCrypto] send in
+                    // Initialize the round in the voting DB so we can store tree state
+                    try? await votingCrypto.clearRound(roundId)
+                    let params = VotingRoundParams(
+                        voteRoundId: Data(repeating: 0x01, count: 32),
+                        snapshotHeight: snapshotHeight,
+                        eaPK: Data(repeating: 0xEA, count: 32),
+                        ncRoot: Data(repeating: 0xAA, count: 32),
+                        nullifierIMTRoot: Data(repeating: 0xBB, count: 32)
+                    )
+                    try await votingCrypto.initRound(params, nil)
+
+                    // Fetch tree state from lightwalletd at snapshot height
+                    let treeStateBytes = try await sdkSynchronizer.getTreeState(snapshotHeight)
+                    try await votingCrypto.storeTreeState(roundId, treeStateBytes)
+                    print("[Voting] Stored tree state at height \(snapshotHeight)")
+
+                    // Generate witnesses (includes verification on the Rust side)
+                    let witnesses = try await votingCrypto.generateNoteWitnesses(roundId, walletDbPath, notes)
+                    print("[Voting] Generated \(witnesses.count) witnesses")
+
+                    // Verify each witness on the Swift side for UI display
+                    var results: [Voting.State.NoteWitnessResult] = []
+                    for (i, witness) in witnesses.enumerated() {
+                        let verified = (try? await votingCrypto.verifyWitness(witness)) ?? false
+                        let note = notes[i]
+                        results.append(.init(position: note.position, value: note.value, verified: verified))
+                        print("[Voting] Note pos=\(note.position) value=\(note.value) verified=\(verified)")
+                    }
+                    await send(.witnessVerificationCompleted(results, witnesses))
+                } catch: { error, send in
+                    print("[Voting] Witness verification failed: \(error)")
+                    await send(.witnessVerificationFailed(error.localizedDescription))
+                }
+
+            case .witnessVerificationCompleted(let results, let witnesses):
+                state.noteWitnessResults = results
+                state.cachedWitnesses = witnesses
+                state.witnessStatus = .completed
+                return .none
+
+            case .witnessVerificationFailed(let error):
+                state.witnessStatus = .failed(error)
                 return .none
 
             // MARK: - DB State Stream
@@ -313,6 +398,10 @@ public struct Voting {
                 let cachedNotes = state.walletNotes
                 let networkId: UInt32 = zcashSDKEnvironment.network.networkType == .mainnet ? 0 : 1
                 let accountIndex: UInt32 = 0
+                // Flatten each witness auth path into a single Data for the delegation circuit
+                let inclusionProofs = state.cachedWitnesses.map { witness in
+                    witness.authPath.reduce(Data()) { $0 + $1 }
+                }
                 return .merge(
                     // Subscribe to DB state stream (follows SDKSynchronizer pattern)
                     .publisher {
@@ -322,20 +411,8 @@ public struct Voting {
                     }
                     .cancellable(id: cancelStateStreamId, cancelInFlight: true),
                     // Run delegation proof pipeline
+                    // Round is already initialized and witnesses cached by verifyWitnesses
                     .run { [votingCrypto, mnemonic, walletStorage] send in
-                        // DB already opened by initialize
-
-                        // Clear any previous data for this round, then initialize
-                        try? await votingCrypto.clearRound(roundId)
-                        let params = VotingRoundParams(
-                            voteRoundId: activeSession.voteRoundId,
-                            snapshotHeight: snapshotHeight,
-                            eaPK: activeSession.eaPK,
-                            ncRoot: activeSession.ncRoot,
-                            nullifierIMTRoot: activeSession.nullifierIMTRoot
-                        )
-                        try await votingCrypto.initRound(params, nil)
-
                         // Reload hotkey from keychain (generated during initialize)
                         let senderPhrase = try walletStorage.exportWallet().seedPhrase.value()
                         let senderSeed = try mnemonic.toSeed(senderPhrase)
@@ -361,10 +438,11 @@ public struct Voting {
                             delegationInputs.pkdNewX,
                             delegationInputs.hotkeyRawAddress
                         )
+                        // Use real Merkle inclusion proofs from verified witnesses
                         _ = try await votingCrypto.buildDelegationWitness(
                             roundId, action,
-                            [Data(repeating: 0x11, count: 32)],
-                            [Data(repeating: 0x22, count: 32)]
+                            inclusionProofs,
+                            [Data(repeating: 0x22, count: 32)] // exclusion proofs still mocked
                         )
 
                         // Generate delegation proof (long-running, reports progress)

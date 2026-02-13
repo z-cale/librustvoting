@@ -14,6 +14,7 @@ struct DelegationSigningView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     transactionSummary()
+                    noteVerificationSection()
                 }
                 .padding(.vertical, 1)
 
@@ -126,18 +127,93 @@ struct DelegationSigningView: View {
         .padding(.bottom, 20)
     }
 
+    // MARK: - Note Verification
+
+    @ViewBuilder
+    private func noteVerificationSection() -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Note Verification")
+                .zFont(.semiBold, size: 14, style: Design.Text.primary)
+
+            switch store.witnessStatus {
+            case .notStarted:
+                EmptyView()
+
+            case .inProgress:
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Verifying note witnesses...")
+                        .zFont(.medium, size: 14, style: Design.Text.tertiary)
+                }
+
+            case .completed:
+                ForEach(store.noteWitnessResults) { result in
+                    noteResultRow(result)
+                }
+
+                let passCount = store.noteWitnessResults.filter(\.verified).count
+                let total = store.noteWitnessResults.count
+                Text("\(passCount)/\(total) notes verified")
+                    .zFont(.medium, size: 13, style: passCount == total
+                        ? Design.Text.primary
+                        : Design.Text.tertiary
+                    )
+
+            case .failed(let error):
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text("Verification failed: \(error)")
+                        .zFont(.medium, size: 13, style: Design.Text.tertiary)
+                        .lineLimit(3)
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
+    }
+
+    @ViewBuilder
+    private func noteResultRow(_ result: Voting.State.NoteWitnessResult) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: result.verified ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(result.verified ? .green : .red)
+                .font(.system(size: 14))
+
+            let zec = Double(result.value) / 100_000_000.0
+            Text(String(format: "%.2f ZEC", zec))
+                .zFont(.medium, size: 14, style: Design.Text.primary)
+
+            Text("pos \(result.position)")
+                .zFont(size: 12, style: Design.Text.tertiary)
+
+            Spacer()
+
+            Text(result.verified ? "PASS" : "FAIL")
+                .zFont(.semiBold, size: 12, style: Design.Text.primary)
+                .foregroundStyle(result.verified ? .green : .red)
+        }
+    }
+
     // MARK: - Action Button
 
     @ViewBuilder
     private func actionButton() -> some View {
+        let witnessReady = store.witnessStatus == .completed
+            && store.noteWitnessResults.allSatisfy(\.verified)
+
         if store.isKeystoneUser {
             ZashiButton("Confirm with Keystone") {
                 store.send(.delegationApproved)
             }
+            .disabled(!witnessReady)
+            .opacity(witnessReady ? 1.0 : 0.5)
         } else {
             ZashiButton("Authorize Voting") {
                 store.send(.delegationApproved)
             }
+            .disabled(!witnessReady)
+            .opacity(witnessReady ? 1.0 : 0.5)
         }
     }
 
