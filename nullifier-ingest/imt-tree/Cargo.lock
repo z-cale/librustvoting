@@ -370,6 +370,7 @@ dependencies = [
  "orchard",
  "pasta_curves",
  "rand",
+ "rayon",
 ]
 
 [[package]]

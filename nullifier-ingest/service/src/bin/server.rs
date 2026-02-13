@@ -162,15 +162,34 @@ async fn main() -> Result<()> {
         .parse()
         .expect("PORT must be a valid u16");
 
-    // Load tree from binary file or SQLite database
-    let tree = if let Ok(tree_path) = env::var("TREE_PATH") {
-        eprintln!("Loading tree from file: {}", tree_path);
+    // Load tree: prefer full-tree file > ranges file > SQLite database.
+    // After a DB build, the full tree is automatically saved as a sidecar
+    // file so subsequent restarts skip all hashing.
+    let tree = if let Ok(tree_file) = env::var("TREE_FILE") {
+        eprintln!("Loading full tree from file: {}", tree_file);
+        NullifierTree::load_full(Path::new(&tree_file))?
+    } else if let Ok(tree_path) = env::var("TREE_PATH") {
+        eprintln!("Loading tree from ranges file: {}", tree_path);
         NullifierTree::load(Path::new(&tree_path))?
     } else {
         let db_path = env::var("DB_PATH").unwrap_or_else(|_| "nullifiers.db".into());
-        eprintln!("Loading tree from database: {}", db_path);
-        let connection = Connection::open(&db_path)?;
-        tree_db::tree_from_db(&connection)?
+
+        // Check for an auto-saved sidecar from a previous run.
+        let sidecar = format!("{}.tree", db_path);
+        if Path::new(&sidecar).exists() {
+            eprintln!("Loading full tree from sidecar: {}", sidecar);
+            NullifierTree::load_full(Path::new(&sidecar))?
+        } else {
+            eprintln!("Loading tree from database: {}", db_path);
+            let connection = Connection::open(&db_path)?;
+            let tree = tree_db::tree_from_db(&connection)?;
+
+            // Auto-save full tree so next restart is instant.
+            eprintln!("Saving full tree to sidecar: {}", sidecar);
+            tree.save_full(Path::new(&sidecar))?;
+
+            tree
+        }
     };
 
     eprintln!(

@@ -1,10 +1,12 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::Result;
 use ff::{Field, PrimeField as _};
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3, Spec};
 use pasta_curves::Fp;
+use rayon::prelude::*;
 
 /// Depth of the nullifier range Merkle tree.
 ///
@@ -193,10 +195,11 @@ impl PoseidonHasher {
 
 /// Hash each `(low, high)` range pair into a single leaf commitment.
 pub fn commit_ranges(ranges: &[Range]) -> Vec<Fp> {
-    let hasher = PoseidonHasher::new();
     ranges
-        .iter()
-        .map(|[low, high]| hasher.hash(*low, *high))
+        .par_iter()
+        .map_init(PoseidonHasher::new, |hasher, [low, high]| {
+            hasher.hash(*low, *high)
+        })
         .collect()
 }
 
@@ -229,28 +232,36 @@ pub fn precompute_empty_hashes() -> [Fp; TREE_DEPTH] {
 /// This uses [`TREE_DEPTH`] levels and retains every intermediate layer so
 /// that Merkle auth paths can be extracted in O([`TREE_DEPTH`]) via simple
 /// sibling lookups.
-fn build_levels(leaves: &[Fp], empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
+fn build_levels(mut leaves: Vec<Fp>, empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
     let hasher = PoseidonHasher::new();
     let mut levels: Vec<Vec<Fp>> = Vec::with_capacity(TREE_DEPTH);
 
     // Level 0 = leaf commitments, padded to even length.
-    let mut layer = leaves.to_vec();
-    if layer.is_empty() {
-        layer.push(empty[0]);
+    // Takes ownership of `leaves` to avoid a 1.6 GB memcpy at scale.
+    if leaves.is_empty() {
+        leaves.push(empty[0]);
     }
-    if layer.len() & 1 == 1 {
-        layer.push(empty[0]);
+    if leaves.len() & 1 == 1 {
+        leaves.push(empty[0]);
     }
-    levels.push(layer);
+    levels.push(leaves);
+
+    // Minimum number of pairs before we dispatch to Rayon.
+    const PAR_THRESHOLD: usize = 1024;
 
     // Hash pairs at each level to produce the next.
     for i in 0..TREE_DEPTH - 1 {
         let prev = &levels[i];
         let pairs = prev.len() / 2;
-        let mut next = Vec::with_capacity(pairs + 1);
-        for j in 0..pairs {
-            next.push(hasher.hash(prev[j * 2], prev[j * 2 + 1]));
-        }
+        let mut next: Vec<Fp> = if pairs >= PAR_THRESHOLD {
+            prev.par_chunks_exact(2)
+                .map_init(PoseidonHasher::new, |h, pair| h.hash(pair[0], pair[1]))
+                .collect()
+        } else {
+            (0..pairs)
+                .map(|j| hasher.hash(prev[j * 2], prev[j * 2 + 1]))
+                .collect()
+        };
         if next.len() & 1 == 1 {
             next.push(empty[i + 1]);
         }
@@ -302,23 +313,155 @@ pub fn save_tree(path: &Path, ranges: &[Range]) -> Result<()> {
 }
 
 /// Deserialize gap ranges from a binary file written by [`save_tree`].
+///
+/// Uses a single `read` syscall followed by parallel parsing for speed.
 pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
-    let mut f = std::fs::File::open(path)?;
-    let mut buf8 = [0u8; 8];
-    f.read_exact(&mut buf8)?;
-    let count = u64::from_le_bytes(buf8) as usize;
-    let mut ranges = Vec::with_capacity(count);
-    let mut buf32 = [0u8; 32];
-    for _ in 0..count {
-        let mut pair = [Fp::zero(); 2];
-        for fp in pair.iter_mut() {
-            f.read_exact(&mut buf32)?;
-            let v: Option<Fp> = Fp::from_repr(buf32).into();
-            *fp = v.ok_or_else(|| anyhow::anyhow!("invalid Fp representation in tree file"))?;
-        }
-        ranges.push(pair);
-    }
+    let t0 = Instant::now();
+    let buf = std::fs::read(path)?;
+    anyhow::ensure!(buf.len() >= 8, "tree file too small");
+    let count = u64::from_le_bytes(buf[..8].try_into().unwrap()) as usize;
+    let expected = 8 + count * 64;
+    anyhow::ensure!(
+        buf.len() >= expected,
+        "tree file truncated: expected {} bytes, got {}",
+        expected,
+        buf.len()
+    );
+    let ranges: Vec<Range> = buf[8..8 + count * 64]
+        .par_chunks_exact(64)
+        .map(|chunk| {
+            let low = Fp::from_repr(chunk[..32].try_into().unwrap()).unwrap();
+            let high = Fp::from_repr(chunk[32..64].try_into().unwrap()).unwrap();
+            [low, high]
+        })
+        .collect();
+    eprintln!(
+        "  File read: {} ranges loaded in {:.1}s",
+        ranges.len(),
+        t0.elapsed().as_secs_f64()
+    );
     Ok(ranges)
+}
+
+/// Serialize a full Merkle tree (ranges + all levels + root) to a binary file.
+///
+/// Format:
+/// ```text
+/// [8-byte LE range_count]
+/// [range_count × 2 × 32-byte Fp]        -- ranges
+/// [for each of TREE_DEPTH levels:
+///     [8-byte LE level_len]
+///     [level_len × 32-byte Fp]           -- node hashes at this level
+/// ]
+/// [32-byte Fp root]
+/// ```
+///
+/// On reload via [`load_full_tree`], zero hashing is required — all data is
+/// read directly from the file.
+pub fn save_full_tree(
+    path: &Path,
+    ranges: &[Range],
+    levels: &[Vec<Fp>],
+    root: Fp,
+) -> Result<()> {
+    let t0 = Instant::now();
+    let mut f = std::fs::File::create(path)?;
+
+    // Ranges
+    let range_count = ranges.len() as u64;
+    f.write_all(&range_count.to_le_bytes())?;
+    for [low, high] in ranges {
+        f.write_all(&low.to_repr())?;
+        f.write_all(&high.to_repr())?;
+    }
+
+    // Levels
+    for level in levels {
+        let level_len = level.len() as u64;
+        f.write_all(&level_len.to_le_bytes())?;
+        for node in level {
+            f.write_all(&node.to_repr())?;
+        }
+    }
+
+    // Root
+    f.write_all(&root.to_repr())?;
+
+    eprintln!(
+        "  Full tree saved: {} ranges, {} levels in {:.1}s",
+        ranges.len(),
+        levels.len(),
+        t0.elapsed().as_secs_f64(),
+    );
+    Ok(())
+}
+
+/// Deserialize a full Merkle tree from a binary file written by [`save_full_tree`].
+///
+/// Returns `(ranges, levels, root)` with zero hashing — all data is read
+/// directly from the file using bulk I/O and parallel parsing.
+pub fn load_full_tree(path: &Path) -> Result<(Vec<Range>, Vec<Vec<Fp>>, Fp)> {
+    let t0 = Instant::now();
+    let buf = std::fs::read(path)?;
+    eprintln!(
+        "  File read: {:.1} MB in {:.1}s",
+        buf.len() as f64 / (1024.0 * 1024.0),
+        t0.elapsed().as_secs_f64()
+    );
+
+    let t1 = Instant::now();
+    let mut pos = 0usize;
+
+    // Helper: read N bytes from buf
+    macro_rules! read_bytes {
+        ($n:expr) => {{
+            let end = pos + $n;
+            anyhow::ensure!(end <= buf.len(), "unexpected EOF in full tree file");
+            let slice = &buf[pos..end];
+            pos = end;
+            slice
+        }};
+    }
+
+    // Ranges
+    let range_count = u64::from_le_bytes(read_bytes!(8).try_into().unwrap()) as usize;
+    let range_bytes = &buf[pos..pos + range_count * 64];
+    pos += range_count * 64;
+    let ranges: Vec<Range> = range_bytes
+        .par_chunks_exact(64)
+        .map(|chunk| {
+            let low = Fp::from_repr(chunk[..32].try_into().unwrap()).unwrap();
+            let high = Fp::from_repr(chunk[32..64].try_into().unwrap()).unwrap();
+            [low, high]
+        })
+        .collect();
+
+    // Levels
+    let mut levels: Vec<Vec<Fp>> = Vec::with_capacity(TREE_DEPTH);
+    for _ in 0..TREE_DEPTH {
+        let level_len = u64::from_le_bytes(read_bytes!(8).try_into().unwrap()) as usize;
+        let level_bytes = &buf[pos..pos + level_len * 32];
+        pos += level_len * 32;
+        let level: Vec<Fp> = level_bytes
+            .par_chunks_exact(32)
+            .map(|chunk| Fp::from_repr(chunk.try_into().unwrap()).unwrap())
+            .collect();
+        levels.push(level);
+    }
+
+    // Root
+    let root_bytes: [u8; 32] = buf[pos..pos + 32].try_into()
+        .map_err(|_| anyhow::anyhow!("unexpected EOF reading root"))?;
+    let root = Fp::from_repr(root_bytes).unwrap();
+
+    eprintln!(
+        "  Full tree parsed: {} ranges, {} levels in {:.1}s",
+        ranges.len(),
+        levels.len(),
+        t1.elapsed().as_secs_f64()
+    );
+
+    Ok((ranges, levels, root))
 }
 
 /// A nullifier non-inclusion tree built from on-chain nullifiers.
@@ -377,9 +520,16 @@ impl NullifierTree {
 
     /// Build a tree from pre-computed gap ranges.
     pub fn from_ranges(ranges: Vec<Range>) -> Self {
+        let t0 = Instant::now();
         let leaves = commit_ranges(&ranges);
+        eprintln!("  Leaf hashing: {} leaves in {:.1}s", leaves.len(), t0.elapsed().as_secs_f64());
+
         let empty_hashes = precompute_empty_hashes();
-        let (root, levels) = build_levels(&leaves, &empty_hashes);
+
+        let t1 = Instant::now();
+        let (root, levels) = build_levels(leaves, &empty_hashes);
+        eprintln!("  Tree build ({} levels): {:.1}s", levels.len(), t1.elapsed().as_secs_f64());
+
         Self { ranges, levels, empty_hashes, root }
     }
 
@@ -443,6 +593,23 @@ impl NullifierTree {
     /// Serialize the tree's ranges to a binary file.
     pub fn save(&self, path: &Path) -> Result<()> {
         save_tree(path, &self.ranges)
+    }
+
+    /// Serialize the full tree (ranges + all levels + root) to a binary file.
+    ///
+    /// On reload via [`load_full`](NullifierTree::load_full), zero hashing is
+    /// required — startup goes from minutes to seconds.
+    pub fn save_full(&self, path: &Path) -> Result<()> {
+        save_full_tree(path, &self.ranges, &self.levels, self.root)
+    }
+
+    /// Load a full tree from a binary file written by [`save_full`](NullifierTree::save_full).
+    ///
+    /// Zero hashing — all data is read directly from the file.
+    pub fn load_full(path: &Path) -> Result<Self> {
+        let (ranges, levels, root) = load_full_tree(path)?;
+        let empty_hashes = precompute_empty_hashes();
+        Ok(Self { ranges, levels, empty_hashes, root })
     }
 }
 
@@ -715,6 +882,33 @@ mod tests {
         let loaded = NullifierTree::load(&path).unwrap();
         assert_eq!(tree.root(), loaded.root());
         assert_eq!(tree.ranges(), loaded.ranges());
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_save_load_full_round_trip() {
+        let tree = NullifierTree::build(four_nullifiers());
+        let dir = std::env::temp_dir().join("imt_tree_test_full");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("full_tree.bin");
+
+        tree.save_full(&path).unwrap();
+        let loaded = NullifierTree::load_full(&path).unwrap();
+
+        assert_eq!(tree.root(), loaded.root());
+        assert_eq!(tree.ranges(), loaded.ranges());
+        assert_eq!(tree.len(), loaded.len());
+
+        // Verify all level hashes match
+        let original_leaves = tree.leaves();
+        let loaded_leaves = loaded.leaves();
+        assert_eq!(original_leaves, loaded_leaves);
+
+        // Verify proofs still work on the loaded tree
+        let value = fp(15);
+        let proof = loaded.prove(value).unwrap();
+        assert!(proof.verify(value, loaded.root()));
 
         std::fs::remove_file(&path).unwrap();
     }
