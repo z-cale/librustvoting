@@ -87,10 +87,13 @@ struct ProposalListView: View {
                     showSnapshotHeight = true
                 }
                 .popover(isPresented: $showSnapshotHeight) {
-                    Text("Block #\(store.votingRound.snapshotHeight.formatted())")
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .padding(12)
-                        .presentationCompactAdaptation(.popover)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Block #\(store.votingRound.snapshotHeight.formatted())")
+                        Text(store.votingRound.snapshotDate.formatted(date: .abbreviated, time: .standard))
+                    }
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .padding(12)
+                    .presentationCompactAdaptation(.popover)
                 }
                 Spacer()
                 detailPill(
