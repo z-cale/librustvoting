@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::Result;
 use ff::{Field, PrimeField as _};
@@ -59,6 +60,7 @@ pub type Range = [Fp; 2];
 
 /// Load all nullifiers from the database, sort them, and build the gap ranges.
 pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Range>> {
+    let t0 = Instant::now();
     let mut s = connection.prepare("SELECT nullifier FROM nullifiers")?;
     let rows = s.query_map([], |r| {
         let v = r.get::<_, [u8; 32]>(0)?;
@@ -66,8 +68,17 @@ pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Range>> {
         Ok(v)
     })?;
     let mut nfs = rows.collect::<Result<Vec<_>, _>>()?;
+    eprintln!("  DB query: {} nullifiers loaded in {:.1}s", nfs.len(), t0.elapsed().as_secs_f64());
+
+    let t1 = Instant::now();
     nfs.sort();
-    Ok(build_nf_ranges(nfs))
+    eprintln!("  Sort: {:.1}s", t1.elapsed().as_secs_f64());
+
+    let t2 = Instant::now();
+    let ranges = build_nf_ranges(nfs);
+    eprintln!("  Build ranges: {} ranges in {:.1}s", ranges.len(), t2.elapsed().as_secs_f64());
+
+    Ok(ranges)
 }
 
 /// Compute the Merkle root over the nullifier gap-range tree.
@@ -336,6 +347,7 @@ pub fn save_tree(path: &Path, ranges: &[Range]) -> Result<()> {
 
 /// Deserialize gap ranges from a binary file written by [`save_tree`].
 pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
+    let t0 = Instant::now();
     let mut f = std::fs::File::open(path)?;
     let mut buf8 = [0u8; 8];
     f.read_exact(&mut buf8)?;
@@ -351,6 +363,7 @@ pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
         }
         ranges.push(pair);
     }
+    eprintln!("  File read: {} ranges loaded in {:.1}s", ranges.len(), t0.elapsed().as_secs_f64());
     Ok(ranges)
 }
 
@@ -416,9 +429,16 @@ impl NullifierTree {
 
     /// Build a tree from pre-computed gap ranges.
     fn from_ranges(ranges: Vec<Range>) -> Self {
+        let t0 = Instant::now();
         let leaves = commit_ranges(&ranges);
+        eprintln!("  Leaf hashing: {} leaves in {:.1}s", leaves.len(), t0.elapsed().as_secs_f64());
+
         let empty_hashes = precompute_empty_hashes();
+
+        let t1 = Instant::now();
         let (root, levels) = build_levels(&leaves, &empty_hashes);
+        eprintln!("  Tree build ({} levels): {:.1}s", levels.len(), t1.elapsed().as_secs_f64());
+
         Self { ranges, levels, empty_hashes, root }
     }
 
