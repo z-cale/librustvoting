@@ -14,3 +14,6 @@ __debug**
 zcaloooors
 
 **/vendor/**
+
+# Swift build artifacts
+keystone-qr/.build/
