@@ -8,6 +8,7 @@ Append-only Poseidon Merkle tree for the **Vote Commitment Tree** in the Zally v
 - [What is an anchor?](#what-is-an-anchor)
 - [How the note commitment tree works in ZCash](#how-the-note-commitment-tree-works-in-zcash)
 - [How we modify this for the vote commitment tree](#how-we-modify-this-for-the-vote-commitment-tree)
+- [Privacy model](#privacy-model)
 - [How the tree participates in each message](#how-the-tree-participates-in-each-message)
 - [Architecture overview](#architecture-overview)
 - [Sync architecture](#sync-architecture)
@@ -233,6 +234,70 @@ Depth 24 provides comfortable headroom for any realistic governance scenario —
 | Leaf capacity | 4.3 billion | 16.7 million | Right-sized |
 
 **If this needs to change:** Increasing the depth later changes every root, Merkle path, and on-chain anchor — effectively a hard fork. Depth 24 is chosen to avoid that scenario while not over-provisioning.
+
+## Privacy model
+
+The protocol provides **voter anonymity and ballot secrecy**. An observer cannot determine who voted, how they voted, or how much voting weight they carry.
+
+### Cryptographic protections
+
+Three mechanisms protect voter identity:
+
+1. **Re-randomized spend authorization (`rk`).** MsgDelegateVote carries a re-randomized verification key `rk`, not the voter's actual spending key. The Keystone hardware wallet signs with the real key, but only `rk` goes on-chain. The chain verifies the signature against `rk`. Two delegations from the same voter produce different, unlinkable `rk` values — the same mechanism Zcash uses to prevent spend-graph analysis.
+
+2. **No account-based authentication.** Vote transactions bypass the Cosmos SDK Tx envelope and use ZKP + RedPallas authentication instead of standard Cosmos signatures. There are no Cosmos accounts, no gas fees, and no sender address on-chain. A transaction is authenticated solely by its ZKP proof and `rk` signature — there is no account identity to link.
+
+3. **Hiding commitments.** The VAN is `Poseidon(DOMAIN_VAN, hotkey, weight, round, authority, rand)` — the blinding factor `rand` makes the commitment hiding. An observer who sees the leaf value cannot extract the hotkey, weight, or any identifying information.
+
+### What is visible on-chain
+
+An observer who scans the chain sees the following per transaction, but **cannot link any of it to a real-world identity or Zcash address**:
+
+| Visible | Source | Why it does not identify the voter |
+|---|---|---|
+| A delegation occurred | `MsgDelegateVote` transaction | No sender address; authenticated by ZKP #1 + `rk` signature |
+| Re-randomized key `rk` | `MsgDelegateVote.rk` | Re-randomized per transaction; unlinkable to the spending key |
+| A vote was cast on Proposal 7 | `MsgCastVote` transaction | No sender address; ZKP #2 hides which VAN was consumed |
+| Leaf indices of new VANs and VCs | Event attributes (`leaf_index`) | Leaf values are hiding commitments; index alone reveals nothing |
+| Governance nullifiers | `MsgDelegateVote.gov_nullifiers` | One-time values that prevent double-delegation; cannot be traced to specific Zcash notes |
+
+### What is hidden
+
+| Secret | Protected by |
+|---|---|
+| **Who voted** (voter identity) | `rk` re-randomization (unlinkable to spending key) + no account-based authentication |
+| **Vote decision** (how they voted) | Encrypted in the vote commitment (VC); accumulated via homomorphic addition into the tally |
+| **Voting weight** (how much ZEC backs the vote) | Hidden in the VAN commitment preimage (`rand` makes it hiding) |
+| **Which Zcash notes back the delegation** | ZKP #1 proves note ownership without revealing which mainchain UTXOs are used |
+| **Which VAN was consumed when voting** | ZKP #2 proves VAN membership without revealing the leaf position |
+| **Which VC a revealed share came from** | ZKP #3 (submitted by the helper server, not the voter) proves VC membership without revealing the position |
+
+### No Cosmos account linkage
+
+Vote transactions bypass the Cosmos SDK Tx envelope entirely and use ZKP + RedPallas authentication instead of standard Cosmos signatures (see `module.go`: the standard `SigVerificationDecorator` is replaced with custom ZKP/RedPallas validation in the AnteHandler). There are no Cosmos accounts, no Cosmos signatures, and no gas fees. Transactions are authenticated purely by the ZKP proofs and the re-randomized `rk` signature — there is no account address that could link two transactions to the same voter.
+
+This means the full anonymity set for ZKP #2 is the **entire tree** (all VANs from all voters). The only remaining non-cryptographic linkage vector is **timing analysis** — if only one delegation and one vote arrive in a short window, timing alone may correlate them. The protocol already includes a random delay for helper server share reveals (Phase 5); similar batching or delay for delegation and vote submission strengthens anonymity.
+
+### Why this is not a risk
+
+The protocol's cryptographic layer fully protects the three properties that matter for a voting system:
+
+1. **Ballot secrecy.** Vote decisions are encrypted in the VC and never appear in plaintext on-chain. The tally is computed homomorphically — only the aggregate result is revealed.
+2. **Weight privacy.** Voting weight is hidden inside the VAN commitment. An observer cannot determine how much ZEC backs any vote.
+3. **Voter anonymity.** There are no Cosmos accounts or sender addresses on vote transactions. The `rk` re-randomization ensures that on-chain data cannot be traced back to a Zcash identity or spending key. ZKP #1 hides the source notes; ZKP #2 hides the consumed VAN; ZKP #3 hides the share-to-voter link.
+4. **Share-to-voter unlinkability.** The helper server (not the voter) submits `MsgRevealShare`, and ZKP #3 proves VC membership without revealing which VC the share came from.
+
+### Wallet recovery and position rediscovery
+
+Unlike Zcash, there is no trial decryption — the wallet discovers its leaf positions at submission time (`MsgDelegateVote` returns the VAN index, `MsgCastVote` returns the new VAN and VC indices) rather than by scanning the tree with a viewing key.
+
+After a wallet reset, positions can be recovered by querying the wallet's own transaction history on the vote chain (the `leaf_index` event attribute records the indices). This does not leak any information beyond what is already public from the transactions themselves.
+
+We currently do not implement the ability to recover. This can be done in the future.
+
+The VAN preimage (specifically the `rand` blinding factor) must be recoverable for the wallet to produce future ZKPs. If `rand` is derived deterministically from the wallet seed (e.g., `rand = PRF(seed, round_id, counter)`), full recovery is possible. If `rand` is truly random and only stored locally, it is lost on reset and the VAN cannot be spent — this is a wallet-implementation concern, not a protocol-level risk.
+
+---
 
 ## How the tree participates in each message
 
@@ -461,6 +526,73 @@ sequenceDiagram
     Note over T: Server reveals Alice's share using root R2 as anchor
     Note over T: MsgRevealShare — no append, tree stays at size 4
 ```
+
+### Server-side vs client-side tree
+
+`TreeServer` and `TreeClient` wrap the **same underlying data structure** — `ShardTree<MemoryShardStore<MerkleHashVote, u32>, 32, 4>` from Zcash's `shardtree` crate. The difference is how leaves enter and what gets retained.
+
+#### What they share
+
+Both sides use identical:
+- **Backing store**: `MemoryShardStore<MerkleHashVote, u32>` (in-memory shard storage, checkpoint ID = `u32` block height)
+- **Tree params**: `TREE_DEPTH = 24`, `SHARD_HEIGHT = 4` (each shard covers 2^4 = 16 leaves), `MAX_CHECKPOINTS = 1000`
+- **Hash function**: `MerkleHashVote` implementing `Hashable` with `Poseidon(left, right)` — no layer tag
+- **Witness generation**: `inner.witness_at_checkpoint_id(pos, &height)` wrapped in `MerklePath`
+- **Root lookup**: `inner.root_at_checkpoint_id(&height)`
+
+#### TreeServer (full tree — chain authority)
+
+The server is the **source of truth**. The chain consensus layer calls `append()` / `append_two()` directly, and every leaf is inserted with `Retention::Marked` so the server can generate witnesses for any position at any checkpoint.
+
+Extra state beyond the ShardTree:
+- `blocks: BTreeMap<u32, BlockCommitments>` — completed block data, populated on `checkpoint()`. This is the data source for `TreeSyncApi`.
+- `pending_leaves: Vec<MerkleHashVote>` + `pending_start: u64` — accumulates leaves for the current (not yet checkpointed) block.
+
+The server also **implements `TreeSyncApi`** so clients can fetch block-level leaf batches and roots from it.
+
+In production, the Go keeper stores leaves in KV (`0x02 || big-endian index → 32-byte Fp`) and the Rust FFI (`sdk/circuits/src/votetree.rs`) rebuilds a `TreeServer` from raw bytes to compute roots and paths.
+
+#### TreeClient (sparse tree — wallet / helper server)
+
+The client is a **sparse mirror**. It does not receive leaves from consensus — it fetches them via `sync(api)` from a `TreeSyncApi` source and replays them locally. The key difference is **selective retention**:
+
+```rust
+let retention = if self.marked_positions.contains(&self.next_position) {
+    Retention::Marked
+} else {
+    Retention::Ephemeral
+};
+```
+
+Only positions in the `marked_positions` set get `Retention::Marked`; everything else is `Retention::Ephemeral` (prunable). This is what makes the tree **sparse** — ShardTree only materializes the subtrees touching marked positions. A wallet with one VAN at position 0 in a tree of 100,000 leaves only retains the ~24 sibling hashes along the path from position 0 to root, not all 100K leaves.
+
+Extra state beyond the ShardTree:
+- `marked_positions: BTreeSet<u64>` — positions the client cares about (wallet: its VAN; helper server: delegated VCs).
+- `last_synced_height: Option<u32>` — tracks incremental sync progress.
+
+During sync, the client validates two safety invariants per block:
+1. **Start index continuity** — each block's `start_index` must match the client's expected next position (catches missed or duplicated blocks).
+2. **Root consistency** — the client's computed root after each checkpoint must match the server's root at that height (catches corrupted data, hash mismatches, or implementation differences).
+
+#### Comparison
+
+| | TreeServer | TreeClient |
+|---|---|---|
+| Leaf source | Direct `append()` (chain consensus) | Indirect via `sync()` from `TreeSyncApi` |
+| Retention policy | All `Marked` (full tree) | Selective: only `marked_positions` are `Marked`, rest `Ephemeral` (sparse) |
+| Extra bookkeeping | `blocks` BTreeMap + `pending_leaves` (serves sync data) | `marked_positions` BTreeSet + `last_synced_height` (tracks sync) |
+| Who uses it | Chain keeper (Go FFI), POC tests | Wallet (ZKP #2), helper server (ZKP #3), CLI |
+| Witness scope | Any position (all marked) | Only pre-registered positions |
+| Root authority | Source of truth | Verifies against server after each block |
+| Production storage | Go KV store + Rust FFI rebuild | In-memory (`MemoryShardStore`) |
+
+#### Zcash parallel
+
+This is exactly how Zcash wallets work with Orchard's note commitment tree:
+- **zcashd / zebrad** maintains the full tree (analogous to `TreeServer`)
+- **Zashi / zcash_client_sqlite** maintains a sparse `ShardTree` (analogous to `TreeClient`), only marking notes the wallet owns for future spend witnesses
+
+The difference from Zcash is that all vote-tree leaves are public (no trial decryption), so the client marks known positions by index rather than discovering them through decryption.
 
 ---
 
