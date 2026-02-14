@@ -2,12 +2,14 @@
 sdk/zallyd
 
 # Rust build artifacts
-sdk/circuits/target/
-vote-commitment-tree/target/
-vote-commitment-tree-client/target/
+**/target/
 
 # Node
 node_modules/
+
+# UI build artifacts
+shielded_vote_generator_ui/dist/
+shielded_vote_generator_ui/.vite/
 
 __debug**
 
