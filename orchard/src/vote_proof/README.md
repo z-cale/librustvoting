@@ -1,16 +1,16 @@
 # Vote Proof Circuit (ZKP 2)
 
-Proves that a registered voter is casting a valid vote, without revealing which VAN they hold. The structure follows the delegation circuit's pattern (ZKP 1) and implements conditions incrementally.
+Proves that a registered voter is casting a valid vote, without revealing which VAN they hold. The structure follows the delegation circuit's pattern (ZKP 1). All 11 conditions are fully implemented.
 
 **Public inputs:** 9 field elements.
-**Current K:** 14 (16,384 rows) — accommodates conditions 1–10, including 12 variable-base ECC scalar multiplications (condition 10), the fixed-base mul (condition 3), and the 10-bit lookup table.
+**Current K:** 14 (16,384 rows) — accommodates all 11 conditions, including 12 variable-base ECC scalar multiplications (condition 10), the fixed-base mul (condition 3), ~31 Poseidon hashes, and the 10-bit lookup table.
 
 ## Inputs
 
 - Public (9 field elements)
    * **van_nullifier** (offset 0): the nullifier of the old VAN being spent (prevents double-vote).
    * **vote_authority_note_new** (offset 1): the new VAN commitment with decremented proposal authority.
-   * **vote_commitment** (offset 2): the vote commitment hash (currently shares_hash; condition 11 will bind the full VC).
+   * **vote_commitment** (offset 2): the vote commitment hash `H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)`.
    * **vote_comm_tree_root** (offset 3): root of the Poseidon-based vote commitment tree at anchor height.
    * **vote_comm_tree_anchor_height** (offset 4): the vote-chain height at which the tree is snapshotted.
    * **proposal_id** (offset 5): which proposal this vote is for.
@@ -41,9 +41,11 @@ Proves that a registered voter is casting a valid vote, without revealing which 
    * **voting_round_id cell**: copied from the instance column, used in condition 2 Poseidon hash and condition 4 inner hash.
    * **domain_van_nullifier cell**: constant encoding of `"vote authority spend"` (condition 4).
    * **proposal_authority_new**: derived as `proposal_authority_old - 1` (condition 5).
-   * **shares_hash**: Poseidon hash of 8 enc_share x-coordinates (condition 9). Temporarily bound to `VOTE_COMMITMENT`; will be consumed by condition 11.
+   * **shares_hash**: Poseidon hash of 8 enc_share x-coordinates (condition 9). Internal wire consumed by condition 11.
    * **SpendAuthG x, y constants**: coordinates of the El Gamal generator (condition 10). Baked into the verification key via `assign_advice_from_constant`.
    * **ea_pk_x, ea_pk_y cells**: copied from the instance column (condition 10). Each ea_pk `NonIdentityPoint` witness is constrained to match these cells.
+   * **DOMAIN_VC constant**: `1`. Domain separation tag for Vote Commitments (condition 11). Baked into the verification key.
+   * **proposal_id cell**: copied from the instance column (condition 11). Used in the vote commitment Poseidon hash.
 
 ## Condition 2: VAN Integrity ✅
 
@@ -234,11 +236,11 @@ The 8 x-coordinates are interleaved per share — `(c1_0, c2_0, c1_1, c2_1, ...)
 
 **Function:** `Poseidon` with `ConstantLength<8>`. Uses `Pow5Chip` / `P128Pow5T3` with rate 2 (4 absorption rounds for 8 inputs, ~5 permutations, ~320 rows).
 
-**Constraint:** The circuit computes the Poseidon hash over all 8 witness values and enforces `constrain_instance(shares_hash, VOTE_COMMITMENT)` — temporarily binding the hash to the public input at offset 2. When condition 11 is implemented, this temporary binding will be replaced: `VOTE_COMMITMENT` will instead be bound to `H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)`, and `shares_hash` will become a purely internal wire.
+**Constraint:** The circuit computes the Poseidon hash over all 8 witness values. The resulting `shares_hash` cell is an internal wire — it is not directly bound to any public input. Instead, condition 11 consumes it as an input to `H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)`, which IS bound to `VOTE_COMMITMENT`.
 
 **Relationship to other conditions:**
 - Condition 10 constrains that the witnessed `(c1_i_x, c2_i_x)` values are valid El Gamal encryptions of the corresponding plaintext shares from conditions 7/8. The enc_share cells are cloned before the Poseidon hash and reused as `constrain_equal` targets in condition 10.
-- Condition 11 will chain `shares_hash` into the full vote commitment, removing the temporary `VOTE_COMMITMENT` binding.
+- Condition 11 chains `shares_hash` into the full vote commitment via `H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)`, which is bound to `VOTE_COMMITMENT` at offset 2.
 
 **Out-of-circuit helper:** `shares_hash()` computes the same Poseidon hash outside the circuit for builder and test use.
 
@@ -287,15 +289,37 @@ Total: 12 variable-base scalar multiplications (~6,000 rows), 4 point additions,
 
 **Constructions:** `EccChip` (reused from condition 3), `NonIdentityPoint`, `ScalarVar`, `Point::add`, `Point::extract_p`.
 
-## Condition 11: Vote Commitment Integrity (TODO)
+## Condition 11: Vote Commitment Integrity ✅
 
-Purpose: the public vote commitment is correctly constructed from the shares hash and the vote choice.
+Purpose: the public vote commitment is correctly constructed from the shares hash, the proposal choice, and the vote decision. This is the final hash that is posted on-chain, inserted into the vote commitment tree, and later opened by ZKP #3 (vote reveal).
 
 ```
-vote_commitment = H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)
+vote_commitment = Poseidon(DOMAIN_VC, shares_hash, proposal_id, vote_decision)
 ```
 
-**Constructions:** `PoseidonChip`.
+Where:
+- **DOMAIN_VC**: `1`. Domain separation tag for Vote Commitments (vs `DOMAIN_VAN = 0`). Assigned via `assign_advice_from_constant` so the value is baked into the verification key. Prevents a vote commitment from ever colliding with a VAN in the shared vote commitment tree.
+- **shares_hash**: the Poseidon hash of all 8 enc_share x-coordinates, computed in condition 9. This is a purely internal wire (not a public input) — it flows from condition 9's output cell directly into condition 11's Poseidon input, ensuring the vote commitment is bound to the actual El Gamal ciphertexts without re-hashing.
+- **proposal_id**: which proposal this vote is for (public input at offset 5). Copied from the instance column via `assign_advice_from_instance`. The verifier checks it matches a valid proposal in the voting window.
+- **vote_decision**: the voter's choice (private witness). Hidden inside the vote commitment — only revealed in ZKP #3 when individual shares are opened. The decision value is opaque to the circuit; its semantic meaning is defined by the application layer.
+
+**Function:** `Poseidon` with `ConstantLength<4>`. Uses `Pow5Chip` / `P128Pow5T3` with rate 2 (2 absorption rounds for 4 inputs, ~3 permutations, ~200 rows).
+
+**Constraint:** The circuit computes the Poseidon hash and enforces `constrain_instance(vote_commitment, VOTE_COMMITMENT)` — binding the derived value to the public input at offset 2. This is the terminal constraint of the vote commitment construction chain: conditions 7–8 validate the plaintext shares, condition 9 hashes the ciphertexts, condition 10 proves the ciphertexts are valid El Gamal encryptions, and condition 11 wraps everything into a single public commitment.
+
+**Data flow (conditions 7–11):**
+```
+shares (7: sum, 8: range) ──┐
+                             ├─ enc_shares (10: El Gamal) ──→ shares_hash (9: Poseidon<8>)
+randomness ──────────────────┘                                       │
+                                                                     ├─ vote_commitment (11: Poseidon<4>) ──→ VOTE_COMMITMENT
+proposal_id ─────────────────────────────────────────────────────────┤
+vote_decision ───────────────────────────────────────────────────────┘
+```
+
+**Out-of-circuit helper:** `vote_commitment_hash()` computes the same Poseidon hash outside the circuit for builder and test use.
+
+**Constructions:** `PoseidonChip` (reused from conditions 1, 2, 4, 6, 9).
 
 ## Column Layout
 
@@ -307,7 +331,7 @@ vote_commitment = H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)
 | `advices[7]` | Poseidon state + AddChip input (a) | — |
 | `advices[8]` | Poseidon state + AddChip input (b) | — |
 | `advices[9]` | Range check running sum | — |
-| `lagrange_coeffs[0]` | Constants (DOMAIN_VAN, ONE, SpendAuthG x/y) | Constants (DOMAIN_VC, etc.) |
+| `lagrange_coeffs[0]` | Constants (DOMAIN_VAN, DOMAIN_VC, ONE, SpendAuthG x/y) | — |
 | `lagrange_coeffs[1]` | ECC Lagrange coefficients | — |
 | `lagrange_coeffs[2..5]` | Poseidon rc_a | — |
 | `lagrange_coeffs[5..8]` | Poseidon rc_b | — |

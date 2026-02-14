@@ -14,11 +14,14 @@
 //! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
 //! - **Condition 9**: Shares Hash Integrity (Poseidon `ConstantLength<8>`, `constrain_instance`).
 //! - **Condition 10**: Encryption Integrity (ECC variable-base mul, `constrain_equal`).
+//! - **Condition 11**: Vote Commitment Integrity (Poseidon `ConstantLength<4>`, `constrain_instance`).
+//!
+//! All 11 conditions are fully implemented.
 
 pub mod circuit;
 
 pub use circuit::{
     base_to_scalar, domain_van_nullifier, elgamal_encrypt, poseidon_hash_2, shares_hash,
-    spend_auth_g_affine, van_integrity_hash, van_nullifier_hash, Circuit, Config, Instance, K,
-    DOMAIN_VAN, VOTE_COMM_TREE_DEPTH,
+    spend_auth_g_affine, van_integrity_hash, van_nullifier_hash, vote_commitment_hash, Circuit,
+    Config, Instance, K, DOMAIN_VAN, DOMAIN_VC, VOTE_COMM_TREE_DEPTH,
 };
