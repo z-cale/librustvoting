@@ -11,6 +11,7 @@
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
+//! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
 
 pub mod circuit;
 

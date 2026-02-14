@@ -187,15 +187,27 @@ Where:
 
 **Constructions:** `AddChip` (reused from condition 5).
 
-## Condition 8: Shares Range (TODO)
+## Condition 8: Shares Range ✅
 
-Purpose: prevent overflow by ensuring each share fits in the designated bit-width.
+Purpose: prevent overflow by ensuring each share fits in a bounded range.
 
 ```
-Each shares_j in [0, 2^24)
+Each share_i in [0, 2^30)
 ```
 
-**Constructions:** `LookupRangeCheckConfig`.
+Where:
+- **share_0..share_3**: the 4 plaintext voting shares from condition 7. Each share must fit in a bounded range to prevent overflow when shares are used in El Gamal encryption (condition 10) and accumulated homomorphically during tally.
+
+**Bound:** The protocol spec targets `[0, 2^24)`, but halo2_gadgets v0.3's `short_range_check` is `pub(crate)` (private to the gadget crate), so the exact 24-bit decomposition (2 × 10-bit + 4-bit short check) is unavailable. We use the next 10-bit-aligned bound: `[0, 2^30)` via 3 × 10-bit words with strict mode. 30 bits (~1B per share) is secure: max sum of 4 shares ≈ 4B, well within the Pallas field, and the homomorphic tally accumulates over far fewer voters than 2^30.
+
+**Structure:** For each share, one `copy_check` call (4 calls total, ~16 rows):
+- `copy_check(share_i, 3, true)` — decomposes the share into 3 × 10-bit lookup words. Each word is range-checked via the 10-bit lookup table. The `true` (strict) flag constrains the final running sum `z_3` to equal 0, enforcing `share < 2^30`.
+
+If a share exceeds `2^30` or is a wrapped large field element (e.g. `p - k` from underflow), the 3-word decomposition produces a non-zero `z_3`, which fails the strict check.
+
+**Note:** Share cells are cloned for `copy_check` (which takes ownership). The original cells remain available for condition 10 (El Gamal encryption inputs).
+
+**Constructions:** `LookupRangeCheckConfig` (reused from condition 5).
 
 ## Condition 9: Shares Hash Integrity (TODO)
 

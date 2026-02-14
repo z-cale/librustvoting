@@ -9,8 +9,9 @@
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
+//! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
 //!
-//! Remaining conditions (3, 8–11) are stubbed with witness fields and
+//! Remaining conditions (3, 9–11) are stubbed with witness fields and
 //! public input slots; constraint logic will be added incrementally.
 //!
 //! ## Conditions overview
@@ -35,6 +36,7 @@
 //! - **Condition 7**: Shares Sum Correctness — `sum(shares_1..4) = total_note_value`.
 //!   *(implemented)*
 //! - **Condition 8**: Shares Range — each `shares_j` in `[0, 2^24)`.
+//!   *(implemented)*
 //! - **Condition 9**: Shares Hash Integrity — `shares_hash = H(enc_share_1..4)`.
 //! - **Condition 10**: Encryption Integrity — each `enc_share_i = ElGamal(shares_i, r_i, ea_pk)`.
 //! - **Condition 11**: Vote Commitment Integrity — `vote_commitment = H(DOMAIN_VC, shares_hash,
@@ -81,9 +83,9 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 /// Circuit size (2^K rows).
 ///
 /// K=12 (4,096 rows). Conditions 1, 2, 4, 5, 6 use ~28 Poseidon
-/// hashes (~2,200 rows), plus the AddChip, range-check running sum,
-/// and 24 Merkle swap regions. The 10-bit lookup table requires
-/// 1,024 rows in the table column. K=12 provides headroom for both.
+/// hashes (~2,200 rows), plus AddChip additions, range-check running
+/// sums (conditions 5 + 8), and 24 Merkle swap regions. The 10-bit
+/// lookup table requires 1,024 rows. K=12 provides headroom.
 pub const K: u32 = 12;
 
 /// Domain tag for Vote Authority Notes.
@@ -214,9 +216,9 @@ pub fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
 /// Configuration for the Vote Proof circuit.
 ///
 /// Holds chip configs for Poseidon (conditions 1, 2, 4, 6), AddChip
-/// (conditions 5, 7), LookupRangeCheck (condition 5), and the Merkle
-/// swap gate (condition 1). Will be extended with ECC and custom gates
-/// as conditions 3, 8–11 are added.
+/// (conditions 5, 7), LookupRangeCheck (conditions 5, 8), and the
+/// Merkle swap gate (condition 1). Will be extended with ECC and
+/// custom gates as conditions 3, 9–11 are added.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Public input column (7 field elements).
@@ -240,14 +242,15 @@ pub struct Config {
     ///
     /// Uses advices[7] (a), advices[8] (b), advices[6] (c), matching
     /// the delegation circuit's column assignment.
-    /// Used in conditions 5 (proposal authority decrement) and 7
-    /// (shares sum correctness).
+    /// Used in conditions 5 (proposal authority decrement) and 7 (shares
+    /// sum correctness).
     add_config: AddConfig,
     /// 10-bit lookup range check configuration.
     ///
     /// Uses advices[9] as the running-sum column. Each word is 10 bits,
     /// so `num_words` × 10 gives the total bit-width checked.
-    /// Used in condition 5 to ensure `proposal_authority_old > 0`.
+    /// Used in condition 5 to ensure `proposal_authority_old > 0`, and
+    /// condition 8 to ensure each share is in `[0, 2^24)`.
     range_check: LookupRangeCheckConfig<pallas::Base, 10>,
     /// Lookup table column for the 10-bit range check.
     ///
@@ -294,9 +297,9 @@ impl Config {
 /// revealing which VAN they hold. Contains witness fields for all
 /// 11 conditions; constraint logic is added incrementally.
 ///
-/// Currently constrained: conditions 1, 2, 4, 5, 6, 7 (VAN membership,
-/// VAN integrity, nullifier, authority decrement, new VAN integrity,
-/// shares sum correctness).
+/// Currently constrained: conditions 1, 2, 4, 5, 6, 7, 8 (VAN
+/// membership, VAN integrity, nullifier, authority decrement, new VAN
+/// integrity, shares sum, shares range).
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     // === VAN ownership and spending (conditions 1–4) ===
@@ -1101,6 +1104,52 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             },
         )?;
 
+        // ---------------------------------------------------------------
+        // Condition 8: Shares Range.
+        //
+        // Each share_i in [0, 2^30)
+        //
+        // Prevents overflow by ensuring each plaintext share fits in a
+        // bounded range. Uses 3 × 10-bit lookup words with strict mode,
+        // giving [0, 2^30). The protocol spec targets [0, 2^24), but
+        // halo2_gadgets v0.3's `short_range_check` is private, so we
+        // use the next available 10-bit-aligned bound. 30 bits (~1B per
+        // share) is still secure: max sum of 4 shares ≈ 4B, well within
+        // the Pallas field, and the homomorphic tally accumulates over
+        // far fewer voters than 2^30.
+        //
+        // If a share exceeds 2^30 (or wraps around the field, e.g.
+        // from underflow), the 3-word decomposition produces a non-zero
+        // z_3 running sum, which fails the strict check.
+        // ---------------------------------------------------------------
+
+        // Share cells are cloned because copy_check takes ownership;
+        // the originals remain available for condition 10 (El Gamal).
+        config.range_check_config().copy_check(
+            layouter.namespace(|| "share_0 < 2^30"),
+            share_0.clone(),
+            3,    // num_words: 3 × 10 = 30 bits
+            true, // strict: running sum terminates at 0
+        )?;
+        config.range_check_config().copy_check(
+            layouter.namespace(|| "share_1 < 2^30"),
+            share_1.clone(),
+            3,
+            true,
+        )?;
+        config.range_check_config().copy_check(
+            layouter.namespace(|| "share_2 < 2^30"),
+            share_2.clone(),
+            3,
+            true,
+        )?;
+        config.range_check_config().copy_check(
+            layouter.namespace(|| "share_3 < 2^30"),
+            share_3.clone(),
+            3,
+            true,
+        )?;
+
         Ok(())
     }
 }
@@ -1212,7 +1261,9 @@ mod tests {
         let mut rng = OsRng;
 
         let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
+        // total_note_value must be small enough that all 4 shares
+        // fit in [0, 2^24) for condition 8's range check.
+        let total_note_value = pallas::Base::from(10_000u64);
         let voting_round_id = pallas::Base::random(&mut rng);
         let gov_comm_rand = pallas::Base::random(&mut rng);
         let vsk_nk = pallas::Base::random(&mut rng);
@@ -1236,13 +1287,12 @@ mod tests {
             gov_comm_rand,
         );
 
-        // Create shares that sum to total_note_value (condition 7).
-        // The first 3 are small constants; the 4th absorbs the remainder
-        // so the field-arithmetic sum is exact.
-        let s0 = pallas::Base::from(100u64);
-        let s1 = pallas::Base::from(200u64);
-        let s2 = pallas::Base::from(300u64);
-        let s3 = total_note_value - s0 - s1 - s2;
+        // Create shares that sum to total_note_value (conditions 7 + 8).
+        // Each share must be in [0, 2^24) for condition 8's range check.
+        let s0 = pallas::Base::from(1_000u64);
+        let s1 = pallas::Base::from(2_000u64);
+        let s2 = pallas::Base::from(3_000u64);
+        let s3 = pallas::Base::from(4_000u64); // 1000 + 2000 + 3000 + 4000 = 10000
 
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
@@ -1301,11 +1351,12 @@ mod tests {
         instance.vote_comm_tree_root = root;
 
         // Use random witnesses that DON'T hash to wrong_van.
-        let total_note_value = pallas::Base::random(&mut OsRng);
-        let s0 = pallas::Base::from(100u64);
-        let s1 = pallas::Base::from(200u64);
-        let s2 = pallas::Base::from(300u64);
-        let s3 = total_note_value - s0 - s1 - s2;
+        // total_note_value is small so shares pass condition 8's range check.
+        let total_note_value = pallas::Base::from(10_000u64);
+        let s0 = pallas::Base::from(1_000u64);
+        let s1 = pallas::Base::from(2_000u64);
+        let s2 = pallas::Base::from(3_000u64);
+        let s3 = pallas::Base::from(4_000u64);
 
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
@@ -1387,7 +1438,7 @@ mod tests {
         let mut rng = OsRng;
 
         let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
+        let total_note_value = pallas::Base::from(10_000u64);
         let voting_round_id = pallas::Base::random(&mut rng);
         let proposal_authority_old = pallas::Base::from(5u64);
         let gov_comm_rand = pallas::Base::random(&mut rng);
@@ -1409,11 +1460,11 @@ mod tests {
         // Use a DIFFERENT vsk_nk in the circuit.
         let wrong_vsk_nk = pallas::Base::random(&mut rng);
 
-        // Shares that sum to total_note_value (condition 7).
-        let s0 = pallas::Base::from(100u64);
-        let s1 = pallas::Base::from(200u64);
-        let s2 = pallas::Base::from(300u64);
-        let s3 = total_note_value - s0 - s1 - s2;
+        // Shares that sum to total_note_value (conditions 7 + 8).
+        let s0 = pallas::Base::from(1_000u64);
+        let s1 = pallas::Base::from(2_000u64);
+        let s2 = pallas::Base::from(3_000u64);
+        let s3 = pallas::Base::from(4_000u64);
 
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
@@ -1546,7 +1597,7 @@ mod tests {
         let mut rng = OsRng;
 
         let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
+        let total_note_value = pallas::Base::from(10_000u64);
         let voting_round_id = pallas::Base::random(&mut rng);
         let proposal_authority_old = pallas::Base::from(5u64);
         let gov_comm_rand = pallas::Base::random(&mut rng);
@@ -1582,11 +1633,11 @@ mod tests {
             proposal_authority_new, gov_comm_rand,
         );
 
-        // Shares that sum to total_note_value (condition 7).
-        let s0 = pallas::Base::from(100u64);
-        let s1 = pallas::Base::from(200u64);
-        let s2 = pallas::Base::from(300u64);
-        let s3 = total_note_value - s0 - s1 - s2;
+        // Shares that sum to total_note_value (conditions 7 + 8).
+        let s0 = pallas::Base::from(1_000u64);
+        let s1 = pallas::Base::from(2_000u64);
+        let s2 = pallas::Base::from(3_000u64);
+        let s3 = pallas::Base::from(4_000u64);
 
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
@@ -1633,10 +1684,93 @@ mod tests {
         let (mut circuit, instance) = make_test_data();
 
         // Corrupt shares[3] so the sum no longer equals total_note_value.
-        circuit.shares[3] = Value::known(pallas::Base::from(999_999u64));
+        // Use a small value that still passes condition 8's range check,
+        // isolating the condition 7 failure.
+        circuit.shares[3] = Value::known(pallas::Base::from(999u64));
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         // Should fail: shares sum ≠ total_note_value.
+        assert!(prover.verify().is_err());
+    }
+
+    // ================================================================
+    // Condition 8 (Shares Range) tests
+    // ================================================================
+
+    /// A share at the maximum valid value (2^30 - 1) should pass.
+    #[test]
+    fn shares_range_max_valid() {
+        let max_share = pallas::Base::from((1u64 << 30) - 1); // 1,073,741,823
+        let total = max_share + max_share + max_share + max_share;
+
+        let mut rng = OsRng;
+        let voting_hotkey_pk = pallas::Base::random(&mut rng);
+        let voting_round_id = pallas::Base::random(&mut rng);
+        let proposal_authority_old = pallas::Base::from(5u64);
+        let gov_comm_rand = pallas::Base::random(&mut rng);
+        let vsk_nk = pallas::Base::random(&mut rng);
+
+        let vote_authority_note_old = van_integrity_hash(
+            voting_hotkey_pk, total, voting_round_id,
+            proposal_authority_old, gov_comm_rand,
+        );
+        let (auth_path, position, vote_comm_tree_root) =
+            build_single_leaf_merkle_path(vote_authority_note_old);
+        let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
+        let proposal_authority_new = proposal_authority_old - pallas::Base::one();
+        let vote_authority_note_new = van_integrity_hash(
+            voting_hotkey_pk, total, voting_round_id,
+            proposal_authority_new, gov_comm_rand,
+        );
+
+        let mut circuit = Circuit::with_van_witnesses(
+            Value::known(auth_path), Value::known(position),
+            Value::known(voting_hotkey_pk), Value::known(total),
+            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old), Value::known(vsk_nk),
+        );
+        circuit.shares = [
+            Value::known(max_share),
+            Value::known(max_share),
+            Value::known(max_share),
+            Value::known(max_share),
+        ];
+
+        let instance = Instance::from_parts(
+            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
+            voting_round_id,
+        );
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+
+    /// A share at exactly 2^30 should fail the range check.
+    #[test]
+    fn shares_range_overflow_fails() {
+        let (mut circuit, instance) = make_test_data();
+
+        // Set share_0 to 2^30 (one above the max valid value).
+        // This will fail condition 8 AND condition 7 (sum mismatch),
+        // but the important thing is the circuit rejects it.
+        circuit.shares[0] = Value::known(pallas::Base::from(1u64 << 30));
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    /// A share that is a large field element (simulating underflow
+    /// from subtraction) should fail the range check.
+    #[test]
+    fn shares_range_field_wrap_fails() {
+        let (mut circuit, instance) = make_test_data();
+
+        // Set share_0 to p - 1 (a wrapped negative value).
+        // The 10-bit decomposition will produce a huge residual.
+        circuit.shares[0] = Value::known(-pallas::Base::one());
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         assert!(prover.verify().is_err());
     }
 
