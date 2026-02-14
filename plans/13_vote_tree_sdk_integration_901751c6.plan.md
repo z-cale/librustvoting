@@ -19,13 +19,13 @@ todos:
     status: completed
   - id: block-index-kv
     content: "Phase 2a: Add block-to-leaf-index KV mapping (0x08 || height -> start_index, count) in keeper"
-    status: pending
+    status: completed
   - id: leaves-endpoint
     content: "Phase 2b: Add GetCommitmentLeaves proto + query handler + REST endpoint"
-    status: pending
+    status: completed
   - id: chain-tests
     content: "Phase 2c: Write chain integration tests (EndBlocker roots, query responses)"
-    status: pending
+    status: completed
   - id: http-sync-api
     content: "Phase 3a: Create vote-tree-remote-client crate with HttpTreeSyncApi implementing TreeSyncApi over HTTP"
     status: pending
