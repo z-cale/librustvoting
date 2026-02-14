@@ -354,6 +354,54 @@ impl Circuit {
     }
 }
 
+/// In-circuit VAN integrity hash (conditions 2 and 6).
+///
+/// Computes the Poseidon hash used for both the old VAN (condition 2)
+/// and the new VAN (condition 6):
+/// ```text
+/// Poseidon(domain_van, voting_hotkey_pk, total_note_value,
+///          voting_round_id, proposal_authority, gov_comm_rand)
+/// ```
+///
+/// The only difference between conditions 2 and 6 is the
+/// `proposal_authority` cell: condition 2 passes `_old`, condition 6
+/// passes `_new` (from condition 5's decrement).
+fn van_integrity_poseidon(
+    config: &Config,
+    layouter: &mut impl Layouter<pallas::Base>,
+    label: &str,
+    domain_van: AssignedCell<pallas::Base, pallas::Base>,
+    voting_hotkey_pk: AssignedCell<pallas::Base, pallas::Base>,
+    total_note_value: AssignedCell<pallas::Base, pallas::Base>,
+    voting_round_id: AssignedCell<pallas::Base, pallas::Base>,
+    proposal_authority: AssignedCell<pallas::Base, pallas::Base>,
+    gov_comm_rand: AssignedCell<pallas::Base, pallas::Base>,
+) -> Result<AssignedCell<pallas::Base, pallas::Base>, plonk::Error> {
+    let message = [
+        domain_van,
+        voting_hotkey_pk,
+        total_note_value,
+        voting_round_id,
+        proposal_authority,
+        gov_comm_rand,
+    ];
+    let poseidon_hasher = PoseidonHash::<
+        pallas::Base,
+        _,
+        poseidon::P128Pow5T3,
+        ConstantLength<6>,
+        3, // WIDTH (state size, from P128Pow5T3)
+        2, // RATE (elements absorbed per permutation)
+    >::init(
+        config.poseidon_chip(),
+        layouter.namespace(|| alloc::format!("{label} Poseidon init")),
+    )?;
+    poseidon_hasher.hash(
+        layouter.namespace(|| alloc::format!("{label} Poseidon hash")),
+        message,
+    )
+}
+
 /// Loads a private witness value into a fresh advice cell.
 ///
 /// Each call gets its own single-row region, matching the delegation
@@ -551,36 +599,17 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //     gov_comm_rand)
         // ---------------------------------------------------------------
 
-        let derived_van = {
-            let message = [
-                domain_van,
-                voting_hotkey_pk,
-                total_note_value,
-                voting_round_id,
-                proposal_authority_old,
-                gov_comm_rand,
-            ];
-            // Width 3 and rate 2: P128Pow5T3 state size (3 field elements) and sponge rate.
-            // Rate 2 absorbs 2 elements per permutation -> 3 rounds for 6 inputs; fewer constraints than rate 1.
-            let poseidon_hasher = PoseidonHash::<
-                pallas::Base,
-                _,
-                poseidon::P128Pow5T3,
-                ConstantLength<6>,
-                3, // WIDTH (state size, from P128Pow5T3)
-                2, // RATE (elements absorbed per permutation)
-            >::init(
-                config.poseidon_chip(),
-                layouter.namespace(|| "VAN integrity Poseidon init"),
-            )?;
-            poseidon_hasher.hash(
-                layouter.namespace(|| {
-                    "Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value, \
-                     voting_round_id, proposal_authority_old, gov_comm_rand)"
-                }),
-                message,
-            )?
-        };
+        let derived_van = van_integrity_poseidon(
+            &config,
+            &mut layouter,
+            "Old VAN integrity",
+            domain_van,
+            voting_hotkey_pk,
+            total_note_value,
+            voting_round_id,
+            proposal_authority_old,
+            gov_comm_rand,
+        )?;
 
         // Constrain: derived VAN hash == witnessed vote_authority_note_old.
         layouter.assign_region(
@@ -771,40 +800,23 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //     total_note_value, voting_round_id, proposal_authority_new,
         //     gov_comm_rand)
         //
-        // Structurally identical to condition 2, with
+        // Same hash as condition 2 via van_integrity_poseidon(), with
         // proposal_authority_new (from condition 5) replacing
         // proposal_authority_old. All other inputs are cell-equality-
         // linked to the same witness cells used in condition 2.
         // ---------------------------------------------------------------
 
-        let derived_van_new = {
-            let message = [
-                domain_van_cond6,
-                voting_hotkey_pk_cond6,
-                total_note_value_cond6,
-                voting_round_id_cond6,
-                proposal_authority_new,
-                gov_comm_rand_cond6,
-            ];
-            let poseidon_hasher = PoseidonHash::<
-                pallas::Base,
-                _,
-                poseidon::P128Pow5T3,
-                ConstantLength<6>,
-                3, // WIDTH
-                2, // RATE
-            >::init(
-                config.poseidon_chip(),
-                layouter.namespace(|| "New VAN integrity Poseidon init"),
-            )?;
-            poseidon_hasher.hash(
-                layouter.namespace(|| {
-                    "Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value, \
-                     voting_round_id, proposal_authority_new, gov_comm_rand)"
-                }),
-                message,
-            )?
-        };
+        let derived_van_new = van_integrity_poseidon(
+            &config,
+            &mut layouter,
+            "New VAN integrity",
+            domain_van_cond6,
+            voting_hotkey_pk_cond6,
+            total_note_value_cond6,
+            voting_round_id_cond6,
+            proposal_authority_new,
+            gov_comm_rand_cond6,
+        )?;
 
         // Bind the derived new VAN to the VOTE_AUTHORITY_NOTE_NEW public input.
         // The verifier checks that the new VAN commitment posted on-chain is
