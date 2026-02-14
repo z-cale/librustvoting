@@ -1,6 +1,12 @@
 import { useState } from "react";
-import { Settings2, X, Clock } from "lucide-react";
+import { Settings2, X, Clock, AlertTriangle, RefreshCw } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
+import {
+  useChainInfo,
+  estimateTimestamp,
+  snapToAnchorInterval,
+  ANCHOR_INTERVAL,
+} from "../store/rpc";
 
 interface RoundEditorProps {
   round: VotingRound;
@@ -77,10 +83,34 @@ function fromLocalInput(val: string): string {
   }
 }
 
+function formatTimestamp(d: Date): string {
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEditorProps) {
   const [showCustom, setShowCustom] = useState(false);
   const endTime = round.settings.endTime;
   const hasEndTime = endTime.length > 0;
+
+  const chain = useChainInfo();
+
+  const snapshotHeight = parseInt(round.settings.snapshotHeight, 10);
+  const isValidHeight = !isNaN(snapshotHeight) && snapshotHeight > 0;
+  const isAnchorAligned = isValidHeight && snapshotHeight % ANCHOR_INTERVAL === 0;
+  const nearestAnchor = isValidHeight ? snapToAnchorInterval(snapshotHeight) : 0;
+
+  // Estimated timestamp for the snapshot height
+  const estimatedDate =
+    isValidHeight && chain.latestHeight && chain.latestTimestamp
+      ? estimateTimestamp(snapshotHeight, chain.latestHeight, chain.latestTimestamp)
+      : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -108,9 +138,23 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
 
         {/* Snapshot height */}
         <div>
-          <label className="block text-[11px] text-text-secondary mb-1">
-            Snapshot height
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[11px] text-text-secondary">
+              Snapshot height
+            </label>
+            {chain.latestHeight && (
+              <span className="text-[10px] text-text-muted flex items-center gap-1">
+                tip: {chain.latestHeight.toLocaleString()}
+                <button
+                  onClick={chain.refresh}
+                  className="p-0.5 hover:text-text-secondary cursor-pointer"
+                  title="Refresh"
+                >
+                  <RefreshCw size={10} className={chain.loading ? "animate-spin" : ""} />
+                </button>
+              </span>
+            )}
+          </div>
           <input
             type="text"
             inputMode="numeric"
@@ -120,10 +164,56 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
               onUpdateSettings({ snapshotHeight: val });
             }}
             placeholder="e.g. 2800000"
-            className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+            className={`w-full px-3 py-2 bg-surface-2 border rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none font-mono ${
+              isValidHeight && !isAnchorAligned
+                ? "border-warning/50 focus:border-warning"
+                : "border-border-subtle focus:border-accent/50"
+            }`}
           />
+
+          {/* Anchor interval warning + snap button */}
+          {isValidHeight && !isAnchorAligned && (
+            <div className="flex items-center gap-2 mt-1.5 px-2.5 py-1.5 bg-warning/10 border border-warning/20 rounded-md">
+              <AlertTriangle size={12} className="text-warning shrink-0" />
+              <p className="text-[10px] text-warning flex-1">
+                Must be a multiple of {ANCHOR_INTERVAL.toLocaleString()}
+              </p>
+              <button
+                onClick={() =>
+                  onUpdateSettings({ snapshotHeight: String(nearestAnchor) })
+                }
+                className="text-[10px] text-accent-glow hover:underline cursor-pointer shrink-0"
+              >
+                Snap to {nearestAnchor.toLocaleString()}
+              </button>
+            </div>
+          )}
+
+          {/* Estimated timestamp */}
+          {estimatedDate && isAnchorAligned && (
+            <div className="flex items-center gap-2 mt-1.5 px-2.5 py-1.5 bg-surface-2 border border-border-subtle rounded-md">
+              <Clock size={12} className="text-accent shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[10px] text-text-primary">
+                  {formatTimestamp(estimatedDate)}
+                </p>
+                <p className="text-[9px] text-text-muted">
+                  estimated @ 75s/block from tip
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Chain error */}
+          {chain.error && (
+            <p className="text-[10px] text-danger mt-1">
+              RPC error: {chain.error}
+            </p>
+          )}
+
           <p className="text-[10px] text-text-muted mt-1">
             The block height at which balances are captured for vote weighting.
+            Must be a multiple of {ANCHOR_INTERVAL.toLocaleString()}.
           </p>
         </div>
 

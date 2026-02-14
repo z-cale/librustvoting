@@ -92,7 +92,8 @@ export function RoundsList({
             {filtered.map((round) => (
               <div
                 key={round.id}
-                className="bg-surface-1 border border-border-subtle rounded-xl p-4 hover:border-border transition-colors"
+                onClick={() => onSelectRound(round.id)}
+                className="bg-surface-1 border border-border-subtle rounded-xl p-4 hover:border-accent/30 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between">
                   <div className="min-w-0 flex-1">
@@ -109,13 +110,7 @@ export function RoundsList({
                       <span>Edited {timeAgo(round.updatedAt)}</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => onSelectRound(round.id)}
-                      className="px-3 py-1 bg-surface-3 hover:bg-accent-dim/30 text-text-secondary hover:text-accent-glow rounded-md text-[11px] transition-colors cursor-pointer"
-                    >
-                      Open
-                    </button>
+                  <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                     <div className="relative">
                       <button
                         onClick={() => setMenuOpen(menuOpen === round.id ? null : round.id)}

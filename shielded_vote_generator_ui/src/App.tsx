@@ -7,9 +7,14 @@ import { JsonView } from "./components/JsonView";
 import { RoundEditor } from "./components/RoundEditor";
 import { RoundsList } from "./components/RoundsList";
 import { useStore } from "./store/useStore";
-import { Shield, Plus, FileText, Settings, Link2, Server } from "lucide-react";
+import { Shield, Plus, FileText, Settings, Server, Settings2, RefreshCw, CheckCircle2 } from "lucide-react";
 import type { Proposal, RoundSettings, RoundStatus, VotingRound } from "./types";
-import { Settings2 } from "lucide-react";
+import {
+  LIGHTWALLETD_ENDPOINTS,
+  getStoredRpc,
+  setStoredRpc,
+  useChainInfo,
+} from "./store/rpc";
 
 type Section = "about" | "rounds" | "builder" | "json" | "downloads" | "preview" | "settings";
 
@@ -432,6 +437,15 @@ function Step({ n, text }: { n: number; text: string }) {
 /* ── Settings page ───────────────────────────────────────────── */
 
 function SettingsPage() {
+  const [rpcUrl, setRpcUrl] = useState(getStoredRpc);
+  const chain = useChainInfo();
+  const isCustom = !LIGHTWALLETD_ENDPOINTS.some((e) => e.url === rpcUrl);
+
+  const handleRpcChange = (url: string) => {
+    setRpcUrl(url);
+    setStoredRpc(url);
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-xl mx-auto px-6 py-12">
@@ -447,53 +461,138 @@ function SettingsPage() {
           </div>
         </div>
 
-        {/* Chain configuration */}
+        {/* Lightwalletd RPC */}
         <h2 className="text-xs font-semibold text-text-primary mb-3">
-          Chain configuration
+          Lightwalletd RPC
         </h2>
         <div className="bg-surface-1 border border-border-subtle rounded-xl p-5 space-y-4 mb-6">
+          <div>
+            <label className="block text-[11px] text-text-secondary mb-1.5">
+              Endpoint
+            </label>
+            <select
+              value={isCustom ? "__custom__" : rpcUrl}
+              onChange={(e) => {
+                if (e.target.value === "__custom__") return;
+                handleRpcChange(e.target.value);
+              }}
+              className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent/50 cursor-pointer [color-scheme:dark]"
+            >
+              {LIGHTWALLETD_ENDPOINTS.map((ep) => (
+                <option key={ep.url} value={ep.url}>
+                  {ep.label} ({ep.region})
+                </option>
+              ))}
+              <option value="__custom__">Custom URL...</option>
+            </select>
+          </div>
+
+          {isCustom && (
+            <div>
+              <label className="block text-[11px] text-text-secondary mb-1">
+                Custom URL
+              </label>
+              <input
+                type="text"
+                value={rpcUrl}
+                onChange={(e) => handleRpcChange(e.target.value)}
+                placeholder="https://your-lightwalletd:443"
+                className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+              />
+            </div>
+          )}
+
+          <p className="text-[10px] text-text-muted">
+            Used for future direct chain submission. Block height data is
+            currently fetched from Blockchair.
+          </p>
+        </div>
+
+        {/* Zcash mainnet status */}
+        <h2 className="text-xs font-semibold text-text-primary mb-3">
+          Zcash mainnet
+        </h2>
+        <div className="bg-surface-1 border border-border-subtle rounded-xl p-5 space-y-4 mb-6">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-secondary">Latest block</span>
+            <div className="flex items-center gap-2">
+              {chain.loading ? (
+                <RefreshCw size={12} className="text-text-muted animate-spin" />
+              ) : chain.error ? (
+                <span className="text-[11px] text-danger">{chain.error}</span>
+              ) : chain.latestHeight ? (
+                <span className="text-[11px] text-text-primary font-mono flex items-center gap-1">
+                  <CheckCircle2 size={10} className="text-success" />
+                  {chain.latestHeight.toLocaleString()}
+                </span>
+              ) : null}
+              <button
+                onClick={chain.refresh}
+                className="p-1 hover:bg-surface-3 rounded text-text-muted hover:text-text-secondary cursor-pointer"
+                title="Refresh"
+              >
+                <RefreshCw size={12} />
+              </button>
+            </div>
+          </div>
           <SettingsStubRow
-            icon={<Server size={14} />}
-            label="RPC endpoint"
-            value="Not configured"
+            label="Anchor interval"
+            value="1,000 blocks"
           />
           <SettingsStubRow
-            icon={<Link2 size={14} />}
-            label="Chain ID"
-            value="Not configured"
-          />
-          <SettingsStubRow
-            icon={<Shield size={14} />}
-            label="Shielded pool"
-            value="Not configured"
+            label="Block time"
+            value="~75 seconds"
           />
         </div>
 
-        <p className="text-[10px] text-text-muted">
-          Chain configuration will be required to submit rounds directly to the
-          vote chain. For now, you can export rounds as JSON.
-        </p>
+        {/* Voting chain (TODO) */}
+        <h2 className="text-xs font-semibold text-text-primary mb-3">
+          Voting chain
+        </h2>
+        <div className="bg-surface-1 border border-border-subtle rounded-xl p-5 space-y-4 mb-6">
+          <div>
+            <label className="block text-[11px] text-text-secondary mb-1">
+              Chain ID
+            </label>
+            <input
+              type="text"
+              disabled
+              placeholder="TODO"
+              className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-muted placeholder:text-text-muted cursor-not-allowed"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] text-text-secondary mb-1">
+              RPC endpoint
+            </label>
+            <input
+              type="text"
+              disabled
+              placeholder="TODO"
+              className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-muted placeholder:text-text-muted cursor-not-allowed"
+            />
+          </div>
+          <p className="text-[10px] text-text-muted">
+            Voting chain configuration will be required to submit rounds
+            directly. For now, export rounds as JSON.
+          </p>
+        </div>
       </div>
     </div>
   );
 }
 
 function SettingsStubRow({
-  icon,
   label,
   value,
 }: {
-  icon: React.ReactNode;
   label: string;
   value: string;
 }) {
   return (
     <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2.5">
-        <span className="text-text-muted">{icon}</span>
-        <span className="text-xs text-text-secondary">{label}</span>
-      </div>
-      <span className="text-[11px] text-text-muted italic">{value}</span>
+      <span className="text-xs text-text-secondary">{label}</span>
+      <span className="text-[11px] text-text-muted">{value}</span>
     </div>
   );
 }
