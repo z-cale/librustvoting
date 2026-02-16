@@ -209,7 +209,7 @@ public struct GovernancePcztResult: Equatable, Sendable {
     /// 32-byte governance commitment (VAN).
     public let van: Data
     /// 32-byte blinding factor used for VAN.
-    public let govCommRand: Data
+    public let vanCommRand: Data
     /// Random nullifiers used for padded dummy notes.
     public let dummyNullifiers: [Data]
     /// Constrained rho for the signed note (32 bytes).
@@ -233,7 +233,7 @@ public struct GovernancePcztResult: Equatable, Sendable {
         cmxNew: Data,
         govNullifiers: [Data],
         van: Data,
-        govCommRand: Data,
+        vanCommRand: Data,
         dummyNullifiers: [Data],
         rhoSigned: Data,
         paddedCmx: [Data],
@@ -249,7 +249,7 @@ public struct GovernancePcztResult: Equatable, Sendable {
         self.cmxNew = cmxNew
         self.govNullifiers = govNullifiers
         self.van = van
-        self.govCommRand = govCommRand
+        self.vanCommRand = vanCommRand
         self.dummyNullifiers = dummyNullifiers
         self.rhoSigned = rhoSigned
         self.paddedCmx = paddedCmx
@@ -272,7 +272,7 @@ public struct DelegationAction: Equatable, Sendable {
     /// 32-byte governance commitment (VAN).
     public let van: Data
     /// 32-byte blinding factor used for VAN.
-    public let govCommRand: Data
+    public let vanCommRand: Data
     /// Random nullifiers used for padded dummy notes (needed for circuit witness).
     public let dummyNullifiers: [Data]
     /// Constrained rho for the signed note (32 bytes). Spec §1.3.4.1.
@@ -297,7 +297,7 @@ public struct DelegationAction: Equatable, Sendable {
         rk: Data,
         govNullifiers: [Data],
         van: Data,
-        govCommRand: Data,
+        vanCommRand: Data,
         dummyNullifiers: [Data],
         rhoSigned: Data,
         paddedCmx: [Data],
@@ -312,7 +312,7 @@ public struct DelegationAction: Equatable, Sendable {
         self.rk = rk
         self.govNullifiers = govNullifiers
         self.van = van
-        self.govCommRand = govCommRand
+        self.vanCommRand = vanCommRand
         self.dummyNullifiers = dummyNullifiers
         self.rhoSigned = rhoSigned
         self.paddedCmx = paddedCmx
@@ -333,7 +333,7 @@ public struct DelegationRegistration: Equatable, Sendable {
     public let signedNoteNullifier: Data
     public let cmxNew: Data
     public let encMemo: Data
-    public let govComm: Data
+    public let vanCmx: Data
     public let govNullifiers: [Data]
     public let proof: Data
     public let voteRoundId: Data
@@ -345,7 +345,7 @@ public struct DelegationRegistration: Equatable, Sendable {
         signedNoteNullifier: Data,
         cmxNew: Data,
         encMemo: Data,
-        govComm: Data,
+        vanCmx: Data,
         govNullifiers: [Data],
         proof: Data,
         voteRoundId: Data,
@@ -356,7 +356,7 @@ public struct DelegationRegistration: Equatable, Sendable {
         self.signedNoteNullifier = signedNoteNullifier
         self.cmxNew = cmxNew
         self.encMemo = encMemo
-        self.govComm = govComm
+        self.vanCmx = vanCmx
         self.govNullifiers = govNullifiers
         self.proof = proof
         self.voteRoundId = voteRoundId

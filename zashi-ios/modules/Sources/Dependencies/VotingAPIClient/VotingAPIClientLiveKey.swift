@@ -5,36 +5,30 @@ import VotingModels
 // MARK: - API Configuration
 
 /// Configuration for the Zally chain REST API.
-/// Set `activeRoundIdHex` before entering the voting flow.
 public enum ZallyAPIConfig {
     /// Base URL for the chain REST API (e.g. "http://localhost:1317").
     /// TODO: Source from app configuration or server discovery.
     public static var baseURL = "http://localhost:1317"
-
-    /// Hex-encoded 32-byte vote_round_id of the active round.
-    /// Must be set before calling fetchActiveVotingSession.
-    /// TODO: Replace with proper round discovery (QR scan, deep link, or chain query).
-    public static var activeRoundIdHex: String?
 }
 
 // MARK: - Errors
 
 private enum ZallyAPIError: LocalizedError {
-    case noActiveRoundConfigured
     case httpError(statusCode: Int, message: String)
     case invalidResponse(String)
     case txFailed(code: UInt32, log: String)
+    case commitmentTreeTimeout(seconds: TimeInterval)
 
     var errorDescription: String? {
         switch self {
-        case .noActiveRoundConfigured:
-            return "No active voting round configured. Set ZallyAPIConfig.activeRoundIdHex before entering the voting flow."
         case .httpError(let code, let message):
             return "HTTP \(code): \(message)"
         case .invalidResponse(let detail):
             return "Invalid API response: \(detail)"
         case .txFailed(let code, let log):
             return "Transaction failed (code \(code)): \(log)"
+        case .commitmentTreeTimeout(let seconds):
+            return "Commitment tree did not grow within \(Int(seconds))s — the TX may not have been included in a block yet."
         }
     }
 }
@@ -189,10 +183,7 @@ extension VotingAPIClient: DependencyKey {
     public static var liveValue: Self {
         Self(
             fetchActiveVotingSession: {
-                guard let roundIdHex = ZallyAPIConfig.activeRoundIdHex, !roundIdHex.isEmpty else {
-                    throw ZallyAPIError.noActiveRoundConfigured
-                }
-                let json = try await getJSON("/zally/v1/round/\(roundIdHex)")
+                let json = try await getJSON("/zally/v1/rounds/active")
                 guard let round = json["round"] as? [String: Any] else {
                     throw ZallyAPIError.invalidResponse("missing 'round' in response")
                 }
@@ -232,7 +223,7 @@ extension VotingAPIClient: DependencyKey {
                     "signed_note_nullifier": registration.signedNoteNullifier.base64EncodedString(),
                     "cmx_new": registration.cmxNew.base64EncodedString(),
                     "enc_memo": registration.encMemo.base64EncodedString(),
-                    "gov_comm": registration.govComm.base64EncodedString(),
+                    "van_cmx": registration.vanCmx.base64EncodedString(),
                     "gov_nullifiers": registration.govNullifiers.map { $0.base64EncodedString() },
                     "proof": registration.proof.base64EncodedString(),
                     "vote_round_id": registration.voteRoundId.base64EncodedString()
@@ -307,6 +298,21 @@ extension VotingAPIClient: DependencyKey {
                         )
                     }
                 return TallyResult(entries: entries)
+            },
+            awaitCommitmentTreeGrowth: { previousNextIndex, timeoutSeconds in
+                let deadline = Date().addingTimeInterval(timeoutSeconds)
+                while Date() < deadline {
+                    let json = try await getJSON("/zally/v1/commitment-tree/latest")
+                    guard let tree = json["tree"] as? [String: Any] else {
+                        throw ZallyAPIError.invalidResponse("missing 'tree' in response")
+                    }
+                    let state = parseCommitmentTree(from: tree)
+                    if state.nextIndex > previousNextIndex {
+                        return state
+                    }
+                    try await Task.sleep(for: .seconds(1))
+                }
+                throw ZallyAPIError.commitmentTreeTimeout(seconds: timeoutSeconds)
             }
         )
     }

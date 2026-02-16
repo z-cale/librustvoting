@@ -301,14 +301,6 @@ public struct Voting {
                     state.screenStack = [.proposalList]
                 }
 
-                // Propagate round ID to API config. The round ID must be set on state
-                // before entering the voting flow (from QR scan, deep link, or hardcoded
-                // for testing). If not set, fetchActiveVotingSession will fail with a
-                // clear error message.
-                if !state.roundId.isEmpty {
-                    ZallyAPIConfig.activeRoundIdHex = state.roundId
-                }
-
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
@@ -631,12 +623,13 @@ public struct Voting {
                         let registration = try await votingCrypto.getDelegationSubmission(
                             roundId, senderSeed, networkId, accountIndex
                         )
+                        let preTree = try await votingAPI.fetchLatestCommitmentTree()
                         let delegTxResult = try await votingAPI.submitDelegation(registration)
                         print("[Voting] Delegation TX submitted: \(delegTxResult.txHash)")
 
-                        // Store VAN position from commitment tree
-                        let treeState = try await votingAPI.fetchLatestCommitmentTree()
-                        let vanPosition = UInt32(treeState.nextIndex) - 1
+                        // Poll until the delegation TX lands and the tree grows
+                        let postTree = try await votingAPI.awaitCommitmentTreeGrowth(preTree.nextIndex, 30)
+                        let vanPosition = UInt32(postTree.nextIndex) - 1
                         try await votingCrypto.storeVanPosition(roundId, vanPosition)
                         print("[Voting] VAN position stored: \(vanPosition)")
 
@@ -744,12 +737,13 @@ public struct Voting {
                     let registration = try await votingCrypto.getDelegationSubmission(
                         roundId, senderSeed, networkId, accountIndex
                     )
+                    let preTree = try await votingAPI.fetchLatestCommitmentTree()
                     let delegTxResult = try await votingAPI.submitDelegation(registration)
                     print("[Voting] Delegation TX submitted: \(delegTxResult.txHash)")
 
-                    // Store VAN position from commitment tree
-                    let treeState = try await votingAPI.fetchLatestCommitmentTree()
-                    let vanPosition = UInt32(treeState.nextIndex) - 1
+                    // Poll until the delegation TX lands and the tree grows
+                    let postTree = try await votingAPI.awaitCommitmentTreeGrowth(preTree.nextIndex, 30)
+                    let vanPosition = UInt32(postTree.nextIndex) - 1
                     try await votingCrypto.storeVanPosition(roundId, vanPosition)
                     print("[Voting] VAN position stored: \(vanPosition)")
 
@@ -816,8 +810,7 @@ public struct Voting {
 
                         // Sync vote commitment tree from chain and generate VAN witness.
                         // Requires storeVanPosition to have been called after delegation TX.
-                        // TODO: Wire chainNodeBaseUrl from server config / VotingSession
-                        let chainNodeUrl = "http://localhost:1317"
+                        let chainNodeUrl = ZallyAPIConfig.baseURL
                         let anchorHeight = try await votingCrypto.syncVoteTree(roundId, chainNodeUrl)
                         let vanWitness = try await votingCrypto.generateVanWitness(roundId, anchorHeight)
                         print("[Voting] VAN witness: position=\(vanWitness.position), anchor=\(vanWitness.anchorHeight)")
@@ -844,13 +837,14 @@ public struct Voting {
                             hotkeySeed, networkId, builtBundle
                         )
 
-                        // Submit cast-vote TX to chain
+                        // Submit cast-vote TX to chain, polling for tree growth
+                        let preVCTree = try await votingAPI.fetchLatestCommitmentTree()
                         let txResult = try await votingAPI.submitVoteCommitment(builtBundle, castVoteSig)
                         await send(.voteCommitmentSubmitted(txResult.txHash))
 
-                        // Build share payloads from the encrypted shares returned by ZKP #2.
-                        // TODO: Parse VC tree position from cast-vote TX response events
-                        let vcTreePosition: UInt64 = 0
+                        // Wait for the cast-vote TX to land and read the new tree position
+                        let postVCTree = try await votingAPI.awaitCommitmentTreeGrowth(preVCTree.nextIndex, 30)
+                        let vcTreePosition = postVCTree.nextIndex - 1
                         let payloads = try await votingCrypto.buildSharePayloads(
                             builtBundle.encShares, builtBundle, choice, vcTreePosition
                         )

@@ -224,7 +224,7 @@ extension VotingCryptoClient: DependencyKey {
                     rk: result.rk,
                     govNullifiers: result.govNullifiers,
                     van: result.van,
-                    govCommRand: result.govCommRand,
+                    vanCommRand: result.vanCommRand,
                     dummyNullifiers: result.dummyNullifiers,
                     rhoSigned: result.rhoSigned,
                     paddedCmx: result.paddedCmx,
@@ -283,7 +283,7 @@ extension VotingCryptoClient: DependencyKey {
                     cmxNew: result.cmxNew,
                     govNullifiers: result.govNullifiers,
                     van: result.van,
-                    govCommRand: result.govCommRand,
+                    vanCommRand: result.vanCommRand,
                     dummyNullifiers: result.dummyNullifiers,
                     rhoSigned: result.rhoSigned,
                     paddedCmx: result.paddedCmx,
@@ -375,7 +375,7 @@ extension VotingCryptoClient: DependencyKey {
                                 proposalId: proposalId,
                                 proof: result.proof,
                                 encShares: result.encShares.map {
-                                    EncryptedShare(
+                                    VotingModels.EncryptedShare(
                                         c1: $0.c1, c2: $0.c2,
                                         shareIndex: $0.shareIndex,
                                         plaintextValue: $0.plaintextValue,
@@ -459,7 +459,7 @@ extension VotingCryptoClient: DependencyKey {
                     signedNoteNullifier: ffi.nfSigned,
                     cmxNew: ffi.cmxNew,
                     encMemo: ffi.encMemo,
-                    govComm: ffi.govComm,
+                    vanCmx: ffi.govComm,
                     govNullifiers: ffi.govNullifiers,
                     proof: ffi.proof,
                     voteRoundId: voteRoundIdBytes,
