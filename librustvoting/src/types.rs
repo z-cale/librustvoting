@@ -188,6 +188,21 @@ pub struct SharePayload {
     pub all_enc_shares: Vec<EncryptedShare>,
 }
 
+
+/// Computed signature fields for cast-vote TX submission.
+/// Returned by `sign_cast_vote` after ZKP #2 builds the vote commitment bundle.
+#[derive(Clone, Debug)]
+pub struct CastVoteSignature {
+    /// Decompressed r_vpk x-coordinate (32 bytes).
+    pub r_vpk_x: Vec<u8>,
+    /// Decompressed r_vpk y-coordinate (32 bytes).
+    pub r_vpk_y: Vec<u8>,
+    /// Canonical cast-vote sighash (32 bytes).
+    pub sighash: Vec<u8>,
+    /// Spend auth signature over sighash (64 bytes).
+    pub vote_auth_sig: Vec<u8>,
+}
+
 /// JSON deserialization struct for IMT server exclusion proof responses.
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct ImtProofJson {

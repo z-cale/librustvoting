@@ -279,6 +279,30 @@ pub struct SharePayload {
 
 
 
+/// Computed signature fields for cast-vote TX submission.
+#[derive(Clone, uniffi::Record)]
+pub struct CastVoteSignature {
+    /// Decompressed r_vpk x-coordinate (32 bytes).
+    pub r_vpk_x: Vec<u8>,
+    /// Decompressed r_vpk y-coordinate (32 bytes).
+    pub r_vpk_y: Vec<u8>,
+    /// Canonical cast-vote sighash (32 bytes).
+    pub sighash: Vec<u8>,
+    /// Spend auth signature over sighash (64 bytes).
+    pub vote_auth_sig: Vec<u8>,
+}
+
+impl From<voting::CastVoteSignature> for CastVoteSignature {
+    fn from(s: voting::CastVoteSignature) -> Self {
+        Self {
+            r_vpk_x: s.r_vpk_x,
+            r_vpk_y: s.r_vpk_y,
+            sighash: s.sighash,
+            vote_auth_sig: s.vote_auth_sig,
+        }
+    }
+}
+
 /// Complete delegation TX payload ready for chain submission.
 /// Returned by `get_delegation_submission` after proof generation.
 #[derive(Clone, uniffi::Record)]
@@ -1234,6 +1258,38 @@ pub fn build_share_payloads(
         .map(Into::into)
         .collect(),
     )
+}
+
+/// Compute the canonical cast-vote sighash, decompress r_vpk, and sign.
+///
+/// Pure computation — takes fields from `VoteCommitmentBundle` plus hotkey seed.
+/// Returns signature fields needed for the cast-vote TX payload.
+#[uniffi::export]
+pub fn sign_cast_vote(
+    hotkey_seed: Vec<u8>,
+    network_id: u32,
+    vote_round_id_hex: String,
+    r_vpk_bytes: Vec<u8>,
+    van_nullifier: Vec<u8>,
+    vote_authority_note_new: Vec<u8>,
+    vote_commitment: Vec<u8>,
+    proposal_id: u32,
+    anchor_height: u32,
+    alpha_v: Vec<u8>,
+) -> Result<CastVoteSignature, VotingError> {
+    Ok(voting::vote_commitment::sign_cast_vote(
+        &hotkey_seed,
+        network_id,
+        &vote_round_id_hex,
+        &r_vpk_bytes,
+        &van_nullifier,
+        &vote_authority_note_new,
+        &vote_commitment,
+        proposal_id,
+        anchor_height,
+        &alpha_v,
+    )?
+    .into())
 }
 
 #[uniffi::export]
