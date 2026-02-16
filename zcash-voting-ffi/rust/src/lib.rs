@@ -259,6 +259,10 @@ pub struct VoteCommitmentBundle {
     pub vote_round_id: String,
     /// Poseidon hash of encrypted share x-coordinates (32 bytes).
     pub shares_hash: Vec<u8>,
+    /// Compressed r_vpk (32 bytes) for sighash computation and signature verification.
+    pub r_vpk_bytes: Vec<u8>,
+    /// Spend-auth randomizer alpha_v (32 bytes, LE scalar repr).
+    pub alpha_v: Vec<u8>,
 }
 
 #[derive(Clone, uniffi::Record)]
@@ -467,6 +471,8 @@ impl From<voting::VoteCommitmentBundle> for VoteCommitmentBundle {
             anchor_height: b.anchor_height,
             vote_round_id: b.vote_round_id,
             shares_hash: b.shares_hash,
+            r_vpk_bytes: b.r_vpk_bytes,
+            alpha_v: b.alpha_v,
         }
     }
 }
@@ -483,6 +489,8 @@ impl From<VoteCommitmentBundle> for voting::VoteCommitmentBundle {
             anchor_height: b.anchor_height,
             vote_round_id: b.vote_round_id,
             shares_hash: b.shares_hash,
+            r_vpk_bytes: b.r_vpk_bytes,
+            alpha_v: b.alpha_v,
         }
     }
 }
