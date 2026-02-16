@@ -1,6 +1,6 @@
 use crate::types::{
-    validate_encrypted_shares, validate_vote_decision, EncryptedShare, SharePayload,
-    VoteCommitmentBundle, VotingError,
+    validate_encrypted_shares, validate_vote_decision, CastVoteSignature, EncryptedShare,
+    SharePayload, VoteCommitmentBundle, VotingError,
 };
 
 /// Build payloads for helper server (one per share).
@@ -38,6 +38,119 @@ pub fn build_share_payloads(
     }
 
     Ok(payloads)
+}
+
+/// Compute the canonical cast-vote sighash, decompress r_vpk, and sign.
+///
+/// This is a pure computation — no DB access needed. Takes the fields from
+/// `VoteCommitmentBundle` plus the hotkey seed for signing.
+///
+/// The canonical sighash must match Go's `ComputeCastVoteSighash`:
+/// ```text
+/// Blake2b-256(domain || vote_round_id || r_vpk || van_nullifier ||
+///             vote_authority_note_new || vote_commitment ||
+///             proposal_id(4 LE, padded 32) || anchor_height(8 LE, padded 32))
+/// ```
+pub fn sign_cast_vote(
+    hotkey_seed: &[u8],
+    network_id: u32,
+    vote_round_id_hex: &str,
+    r_vpk_bytes: &[u8],
+    van_nullifier: &[u8],
+    vote_authority_note_new: &[u8],
+    vote_commitment: &[u8],
+    proposal_id: u32,
+    anchor_height: u32,
+    alpha_v: &[u8],
+) -> Result<CastVoteSignature, VotingError> {
+    use ff::PrimeField;
+    use group::GroupEncoding;
+    use pasta_curves::arithmetic::CurveAffine;
+
+    // Derive hotkey SpendingKey from seed
+    let sk = crate::zkp2::derive_spending_key(hotkey_seed, network_id)?;
+    let ask = orchard::keys::SpendAuthorizingKey::from(&sk);
+
+    // Deserialize alpha_v
+    let alpha_v_arr: [u8; 32] = alpha_v.try_into().map_err(|_| VotingError::Internal {
+        message: format!("alpha_v must be 32 bytes, got {}", alpha_v.len()),
+    })?;
+    let alpha_v_scalar: pasta_curves::pallas::Scalar =
+        Option::from(pasta_curves::pallas::Scalar::from_repr(alpha_v_arr)).ok_or_else(|| {
+            VotingError::Internal {
+                message: "alpha_v is not a valid Pallas scalar".to_string(),
+            }
+        })?;
+
+    // Compute rsk_v = ask_v.randomize(alpha_v)
+    let rsk_v = ask.randomize(&alpha_v_scalar);
+
+    // Decompress r_vpk to get x, y coordinates
+    let r_vpk_arr: [u8; 32] = r_vpk_bytes.try_into().map_err(|_| VotingError::Internal {
+        message: format!("r_vpk must be 32 bytes, got {}", r_vpk_bytes.len()),
+    })?;
+    let r_vpk_affine: pasta_curves::pallas::Affine =
+        Option::from(pasta_curves::pallas::Affine::from_bytes(&r_vpk_arr)).ok_or_else(|| {
+            VotingError::Internal {
+                message: "r_vpk is not a valid compressed Pallas point".to_string(),
+            }
+        })?;
+    let coords = r_vpk_affine.coordinates().unwrap();
+    let r_vpk_x = coords.x().to_repr().to_vec();
+    let r_vpk_y = coords.y().to_repr().to_vec();
+
+    // Decode vote_round_id from hex to bytes
+    let vote_round_id_bytes =
+        hex::decode(vote_round_id_hex).map_err(|e| VotingError::Internal {
+            message: format!("invalid vote_round_id hex: {e}"),
+        })?;
+
+    // Compute canonical sighash (must match Go's ComputeCastVoteSighash)
+    const CAST_VOTE_SIGHASH_DOMAIN: &[u8] = b"ZALLY_CAST_VOTE_SIGHASH_V0";
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(CAST_VOTE_SIGHASH_DOMAIN);
+    // vote_round_id: pad to 32 bytes
+    extend_padded32(&mut canonical, &vote_round_id_bytes);
+    // r_vpk: already 32 bytes (compressed)
+    canonical.extend_from_slice(r_vpk_bytes);
+    // van_nullifier: pad to 32 bytes
+    extend_padded32(&mut canonical, van_nullifier);
+    // vote_authority_note_new: pad to 32 bytes
+    extend_padded32(&mut canonical, vote_authority_note_new);
+    // vote_commitment: pad to 32 bytes
+    extend_padded32(&mut canonical, vote_commitment);
+    // proposal_id: 4 bytes LE, padded to 32 bytes
+    let mut pid_buf = [0u8; 32];
+    pid_buf[..4].copy_from_slice(&proposal_id.to_le_bytes());
+    canonical.extend_from_slice(&pid_buf);
+    // anchor_height: 8 bytes LE, padded to 32 bytes
+    let mut ah_buf = [0u8; 32];
+    ah_buf[..8].copy_from_slice(&(anchor_height as u64).to_le_bytes());
+    canonical.extend_from_slice(&ah_buf);
+
+    let sighash_full = blake2b_simd::Params::new().hash_length(32).hash(&canonical);
+    let mut sighash = [0u8; 32];
+    sighash.copy_from_slice(sighash_full.as_bytes());
+
+    // Sign
+    let mut rng = rand::rngs::OsRng;
+    let sig = rsk_v.sign(&mut rng, &sighash);
+    let sig_bytes: [u8; 64] = (&sig).into();
+
+    Ok(CastVoteSignature {
+        r_vpk_x,
+        r_vpk_y,
+        sighash: sighash.to_vec(),
+        vote_auth_sig: sig_bytes.to_vec(),
+    })
+}
+
+/// Append exactly 32 bytes to `out` from `b` (pad with zeros if shorter).
+fn extend_padded32(out: &mut Vec<u8>, b: &[u8]) {
+    let mut buf = [0u8; 32];
+    let n = b.len().min(32);
+    buf[..n].copy_from_slice(&b[..n]);
+    out.extend_from_slice(&buf);
 }
 
 #[cfg(test)]
