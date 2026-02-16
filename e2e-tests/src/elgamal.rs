@@ -130,6 +130,24 @@ mod tests {
     }
 
     #[test]
+    fn cross_validate_go_vectors() {
+        // Vectors from Go curvey TestCrossValidationVectors (using standard Pallas generator):
+        // scalar=1 (generator point) — should match pasta_curves generator
+        let go_gen_hex = "00000000ed302d991bf94c09fc98462200000000000000000000000000000040";
+        let go_gen_bytes = hex::decode(go_gen_hex).unwrap();
+
+        // Rust generator point
+        let rust_gen = pallas::Point::generator();
+        let rust_gen_bytes = rust_gen.to_bytes();
+
+        assert_eq!(
+            go_gen_bytes.as_slice(),
+            rust_gen_bytes.as_ref(),
+            "Go standard Pallas generator != Rust pasta_curves generator"
+        );
+    }
+
+    #[test]
     fn homomorphic_add_marshal_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(2);
         let (_sk, pk) = keygen(&mut rng);
