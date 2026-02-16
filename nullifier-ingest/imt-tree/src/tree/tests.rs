@@ -536,3 +536,57 @@ fn test_poseidon_hasher_equivalence() {
         canonical(Fp::one().neg(), Fp::one()),
     );
 }
+
+/// Frozen test vectors for Poseidon P128Pow5T3 ConstantLength<2> over Pallas.
+/// Generated from the canonical `poseidon::Hash` implementation. These protect
+/// against accidental changes to the permutation (e.g. optimized partial rounds).
+#[test]
+fn test_poseidon_frozen_vectors() {
+    let hasher = PoseidonHasher::new();
+
+    let from_hex = |s: &str| -> Fp {
+        let bytes: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
+        Fp::from_repr(bytes).unwrap()
+    };
+
+    // (0, 0)
+    assert_eq!(
+        hasher.hash(Fp::zero(), Fp::zero()),
+        from_hex("7a515983cec6c21e27c2f24fbc31c54d698400d33300ebc7f4677cb71b529403"),
+    );
+    // (1, 2)
+    assert_eq!(
+        hasher.hash(fp(1), fp(2)),
+        from_hex("4ce3bd9407dc758983c62390ce00463beb82796eb0d40a0398993cb4eca55535"),
+    );
+    // (42, 0)
+    assert_eq!(
+        hasher.hash(fp(42), fp(0)),
+        from_hex("fad8a97bb5213839cff67906a2d74baa2b889ae882b3c44f3c0721c7edadaf3d"),
+    );
+    // (0xDEAD_BEEF, 0xCAFE_BABE)
+    assert_eq!(
+        hasher.hash(Fp::from(0xDEAD_BEEFu64), Fp::from(0xCAFE_BABEu64)),
+        from_hex("c2f13f05353ed3b31f348fd82539ed31649c8d31ee12ea0f9da8c22ba1c5b724"),
+    );
+    // (p-1, 1)
+    assert_eq!(
+        hasher.hash(Fp::one().neg(), Fp::one()),
+        from_hex("576b8132d0cba1b8232040b6f89a15e52ef26ada02dda96709f3212a9234d414"),
+    );
+    // (u64::MAX, u64::MAX)
+    assert_eq!(
+        hasher.hash(Fp::from(u64::MAX), Fp::from(u64::MAX)),
+        from_hex("d356503f556176a90fbccd1422c5d7fbf4eff2a2481921ae1edfbd1156eecb31"),
+    );
+    // (1, 1)
+    assert_eq!(
+        hasher.hash(Fp::one(), Fp::one()),
+        from_hex("22ebbf1ee67e974899f33bba822e29877168fe77058b27d00ca332118382b01b"),
+    );
+    // (0, 1)
+    assert_eq!(
+        hasher.hash(Fp::zero(), Fp::one()),
+        from_hex("8358d711a0329d38becd54fba7c283ed3e089a39c91b6a9d10efb02bc3f12f06"),
+    );
+}
