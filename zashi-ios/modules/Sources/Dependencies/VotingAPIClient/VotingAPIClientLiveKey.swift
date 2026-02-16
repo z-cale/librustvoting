@@ -240,17 +240,22 @@ extension VotingAPIClient: DependencyKey {
                 let json = try await postJSON("/zally/v1/delegate-vote", body: body)
                 return try parseTxResult(json)
             },
-            submitVoteCommitment: { bundle in
+            submitVoteCommitment: { bundle, signature in
                 // voteRoundId is a hex string; chain expects base64-encoded bytes
                 let roundIdBytes = dataFromHex(bundle.voteRoundId)
                 let body: [String: Any] = [
                     "van_nullifier": bundle.vanNullifier.base64EncodedString(),
+                    "r_vpk_x": signature.rVpkX.base64EncodedString(),
+                    "r_vpk_y": signature.rVpkY.base64EncodedString(),
                     "vote_authority_note_new": bundle.voteAuthorityNoteNew.base64EncodedString(),
                     "vote_commitment": bundle.voteCommitment.base64EncodedString(),
                     "proposal_id": bundle.proposalId,
                     "proof": bundle.proof.base64EncodedString(),
                     "vote_round_id": roundIdBytes.base64EncodedString(),
-                    "vote_comm_tree_anchor_height": bundle.anchorHeight
+                    "vote_comm_tree_anchor_height": bundle.anchorHeight,
+                    "r_vpk": bundle.rVpkBytes.base64EncodedString(),
+                    "sighash": signature.sighash.base64EncodedString(),
+                    "vote_auth_sig": signature.voteAuthSig.base64EncodedString()
                 ]
                 let json = try await postJSON("/zally/v1/cast-vote", body: body)
                 return try parseTxResult(json)

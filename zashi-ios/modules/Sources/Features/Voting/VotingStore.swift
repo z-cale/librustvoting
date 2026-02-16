@@ -839,8 +839,13 @@ public struct Voting {
                             throw VotingFlowError.missingVoteCommitmentBundle
                         }
 
+                        // Sign the cast-vote TX (sighash + spend auth signature)
+                        let castVoteSig = try await votingCrypto.signCastVote(
+                            hotkeySeed, networkId, builtBundle
+                        )
+
                         // Submit cast-vote TX to chain
-                        let txResult = try await votingAPI.submitVoteCommitment(builtBundle)
+                        let txResult = try await votingAPI.submitVoteCommitment(builtBundle, castVoteSig)
                         await send(.voteCommitmentSubmitted(txResult.txHash))
 
                         // Build share payloads from the encrypted shares returned by ZKP #2.

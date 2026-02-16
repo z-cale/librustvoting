@@ -115,4 +115,11 @@ public struct VotingCryptoClient {
     public var syncVoteTree: @Sendable (_ roundId: String, _ nodeUrl: String) async throws -> UInt32
     public var generateVanWitness: @Sendable (_ roundId: String, _ anchorHeight: UInt32) async throws -> VanWitness
     public var markVoteSubmitted: @Sendable (_ roundId: String, _ proposalId: UInt32) async throws -> Void
+    /// Compute canonical cast-vote sighash, decompress r_vpk, and sign.
+    /// Call after `buildVoteCommitment` completes, before `submitVoteCommitment`.
+    public var signCastVote: @Sendable (
+        _ hotkeySeed: [UInt8],
+        _ networkId: UInt32,
+        _ bundle: VoteCommitmentBundle
+    ) async throws -> CastVoteSignature
 }

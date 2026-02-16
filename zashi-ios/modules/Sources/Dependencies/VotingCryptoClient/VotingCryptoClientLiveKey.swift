@@ -384,7 +384,9 @@ extension VotingCryptoClient: DependencyKey {
                                 },
                                 anchorHeight: result.anchorHeight,
                                 voteRoundId: result.voteRoundId,
-                                sharesHash: result.sharesHash
+                                sharesHash: result.sharesHash,
+                                rVpkBytes: result.rVpkBytes,
+                                alphaV: result.alphaV
                             )
                             continuation.yield(.completed(bundle))
                             continuation.finish()
@@ -414,7 +416,9 @@ extension VotingCryptoClient: DependencyKey {
                     encShares: ffiShares,
                     anchorHeight: commitment.anchorHeight,
                     voteRoundId: commitment.voteRoundId,
-                    sharesHash: commitment.sharesHash
+                    sharesHash: commitment.sharesHash,
+                    rVpkBytes: commitment.rVpkBytes,
+                    alphaV: commitment.alphaV
                 )
                 let ffiPayloads = try db.buildSharePayloads(
                     encShares: ffiShares,
@@ -483,6 +487,26 @@ extension VotingCryptoClient: DependencyKey {
                 let db = try await dbActor.database()
                 try db.markVoteSubmitted(roundId: roundId, proposalId: proposalId)
                 publishState(db: db, roundId: roundId)
+            },
+            signCastVote: { hotkeySeed, networkId, bundle in
+                let ffiSig = try ZcashVotingFFI.signCastVote(
+                    hotkeySeed: Data(hotkeySeed),
+                    networkId: networkId,
+                    voteRoundIdHex: bundle.voteRoundId,
+                    rVpkBytes: bundle.rVpkBytes,
+                    vanNullifier: bundle.vanNullifier,
+                    voteAuthorityNoteNew: bundle.voteAuthorityNoteNew,
+                    voteCommitment: bundle.voteCommitment,
+                    proposalId: bundle.proposalId,
+                    anchorHeight: bundle.anchorHeight,
+                    alphaV: bundle.alphaV
+                )
+                return CastVoteSignature(
+                    rVpkX: ffiSig.rVpkX,
+                    rVpkY: ffiSig.rVpkY,
+                    sighash: ffiSig.sighash,
+                    voteAuthSig: ffiSig.voteAuthSig
+                )
             }
         )
     }

@@ -400,6 +400,11 @@ public struct VoteCommitmentBundle: Equatable, Sendable {
     public let voteRoundId: String
     /// Poseidon hash of encrypted share x-coordinates (32 bytes).
     public let sharesHash: Data
+    /// Compressed r_vpk (32 bytes) for sighash computation and signature verification.
+    public let rVpkBytes: Data
+    /// Spend-auth randomizer alpha_v (32 bytes, LE scalar repr).
+    /// Needed to sign the TX2 sighash: rsk_v = ask_v.randomize(&alpha_v).
+    public let alphaV: Data
 
     public init(
         vanNullifier: Data,
@@ -410,7 +415,9 @@ public struct VoteCommitmentBundle: Equatable, Sendable {
         encShares: [EncryptedShare],
         anchorHeight: UInt32,
         voteRoundId: String,
-        sharesHash: Data
+        sharesHash: Data,
+        rVpkBytes: Data = Data(),
+        alphaV: Data = Data()
     ) {
         self.vanNullifier = vanNullifier
         self.voteAuthorityNoteNew = voteAuthorityNoteNew
@@ -421,6 +428,8 @@ public struct VoteCommitmentBundle: Equatable, Sendable {
         self.anchorHeight = anchorHeight
         self.voteRoundId = voteRoundId
         self.sharesHash = sharesHash
+        self.rVpkBytes = rVpkBytes
+        self.alphaV = alphaV
     }
 }
 
@@ -470,6 +479,22 @@ public struct CommitmentTreeState: Equatable, Sendable {
         self.nextIndex = nextIndex
         self.root = root
         self.height = height
+    }
+}
+
+/// Computed signature fields for cast-vote TX submission.
+/// Returned by signCastVote after ZKP #2 builds the vote commitment bundle.
+public struct CastVoteSignature: Equatable, Sendable {
+    public let rVpkX: Data
+    public let rVpkY: Data
+    public let sighash: Data
+    public let voteAuthSig: Data
+
+    public init(rVpkX: Data, rVpkY: Data, sighash: Data, voteAuthSig: Data) {
+        self.rVpkX = rVpkX
+        self.rVpkY = rVpkY
+        self.sighash = sighash
+        self.voteAuthSig = voteAuthSig
     }
 }
 
