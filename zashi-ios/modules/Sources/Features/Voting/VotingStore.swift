@@ -300,6 +300,15 @@ public struct Voting {
                 if !state.isKeystoneUser {
                     state.screenStack = [.proposalList]
                 }
+
+                // Propagate round ID to API config. The round ID must be set on state
+                // before entering the voting flow (from QR scan, deep link, or hardcoded
+                // for testing). If not set, fetchActiveVotingSession will fail with a
+                // clear error message.
+                if !state.roundId.isEmpty {
+                    ZallyAPIConfig.activeRoundIdHex = state.roundId
+                }
+
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
@@ -579,7 +588,7 @@ public struct Voting {
                     .cancellable(id: cancelStateStreamId, cancelInFlight: true),
                     // Run delegation proof pipeline
                     // Round is already initialized and witnesses cached by verifyWitnesses
-                    .run { [sdkSynchronizer, votingCrypto, mnemonic, walletStorage] send in
+                    .run { [sdkSynchronizer, votingCrypto, votingAPI, mnemonic, walletStorage] send in
                         // Reload hotkey from keychain (generated during initialize)
                         let senderPhrase = try walletStorage.exportWallet().seedPhrase.value()
                         let senderSeed = try mnemonic.toSeed(senderPhrase)
@@ -615,9 +624,23 @@ public struct Voting {
                                 await send(.delegationProofProgress(p))
                             case .completed(let proof):
                                 print("[Voting] ZKP #1 COMPLETE — proof size: \(proof.count) bytes (real=5216, mock=32)")
-                                await send(.delegationProofCompleted)
                             }
                         }
+
+                        // After proof completes, submit delegation TX to chain
+                        let registration = try await votingCrypto.getDelegationSubmission(
+                            roundId, senderSeed, networkId, accountIndex
+                        )
+                        let delegTxResult = try await votingAPI.submitDelegation(registration)
+                        print("[Voting] Delegation TX submitted: \(delegTxResult.txHash)")
+
+                        // Store VAN position from commitment tree
+                        let treeState = try await votingAPI.fetchLatestCommitmentTree()
+                        let vanPosition = UInt32(treeState.nextIndex) - 1
+                        try await votingCrypto.storeVanPosition(roundId, vanPosition)
+                        print("[Voting] VAN position stored: \(vanPosition)")
+
+                        await send(.delegationProofCompleted)
                     } catch: { error, send in
                         if isKeystoneUser {
                             await send(.keystoneSigningFailed(error.localizedDescription))
@@ -698,7 +721,7 @@ public struct Voting {
                 // service endpoint is deployed. For now, the Rust side fetches IMT proofs from
                 // this URL for each note's nullifier.
                 let imtServerUrl = imtServerBaseUrl
-                return .run { [votingCrypto, mnemonic, walletStorage] send in
+                return .run { [votingCrypto, votingAPI, mnemonic, walletStorage] send in
                     let senderPhrase = try walletStorage.exportWallet().seedPhrase.value()
                     let senderSeed = try mnemonic.toSeed(senderPhrase)
                     let hotkeyPhrase = try walletStorage.exportVotingHotkey().seedPhrase.value()
@@ -714,9 +737,23 @@ public struct Voting {
                             await send(.delegationProofProgress(p))
                         case .completed(let proof):
                             print("[Voting] ZKP #1 COMPLETE — proof size: \(proof.count) bytes (real=5216, mock=32)")
-                            await send(.delegationProofCompleted)
                         }
                     }
+
+                    // After proof completes, submit delegation TX to chain
+                    let registration = try await votingCrypto.getDelegationSubmission(
+                        roundId, senderSeed, networkId, accountIndex
+                    )
+                    let delegTxResult = try await votingAPI.submitDelegation(registration)
+                    print("[Voting] Delegation TX submitted: \(delegTxResult.txHash)")
+
+                    // Store VAN position from commitment tree
+                    let treeState = try await votingAPI.fetchLatestCommitmentTree()
+                    let vanPosition = UInt32(treeState.nextIndex) - 1
+                    try await votingCrypto.storeVanPosition(roundId, vanPosition)
+                    print("[Voting] VAN position stored: \(vanPosition)")
+
+                    await send(.delegationProofCompleted)
                 } catch: { error, send in
                     await send(.delegationProofFailed(error.localizedDescription))
                 }

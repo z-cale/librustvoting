@@ -438,6 +438,30 @@ extension VotingCryptoClient: DependencyKey {
                     )
                 }
             },
+            getDelegationSubmission: { roundId, senderSeed, networkId, accountIndex in
+                let db = try await dbActor.database()
+                let ffi = try db.getDelegationSubmission(
+                    roundId: roundId,
+                    senderSeed: Data(senderSeed),
+                    networkId: networkId,
+                    accountIndex: accountIndex
+                )
+                // Map FFI DelegationSubmission → VotingModels DelegationRegistration
+                // voteRoundId is hex-encoded in FFI; decode to raw bytes for chain submission
+                let voteRoundIdBytes = Data(hexString: ffi.voteRoundId)
+                return DelegationRegistration(
+                    rk: ffi.rk,
+                    spendAuthSig: ffi.spendAuthSig,
+                    signedNoteNullifier: ffi.nfSigned,
+                    cmxNew: ffi.cmxNew,
+                    encMemo: ffi.encMemo,
+                    govComm: ffi.govComm,
+                    govNullifiers: ffi.govNullifiers,
+                    proof: ffi.proof,
+                    voteRoundId: voteRoundIdBytes,
+                    sighash: ffi.sighash
+                )
+            },
             storeVanPosition: { roundId, position in
                 let db = try await dbActor.database()
                 try db.storeVanPosition(roundId: roundId, position: position)
@@ -526,6 +550,20 @@ private extension VoteChoice {
 public extension Data {
     public var hexString: String {
         map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Initialize Data from a hex-encoded string (e.g. "0a1b2c").
+    init(hexString: String) {
+        var data = Data()
+        var hex = hexString
+        while hex.count >= 2 {
+            let byteString = String(hex.prefix(2))
+            hex = String(hex.dropFirst(2))
+            if let byte = UInt8(byteString, radix: 16) {
+                data.append(byte)
+            }
+        }
+        self = data
     }
 }
 

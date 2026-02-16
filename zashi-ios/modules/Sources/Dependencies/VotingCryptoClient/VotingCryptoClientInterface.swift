@@ -103,6 +103,14 @@ public struct VotingCryptoClient {
         _ voteDecision: VoteChoice,
         _ vcTreePosition: UInt64
     ) async throws -> [SharePayload]
+    /// Reconstruct the full chain-ready delegation TX payload from DB + seed.
+    /// Call after `buildAndProveDelegation` completes.
+    public var getDelegationSubmission: @Sendable (
+        _ roundId: String,
+        _ senderSeed: [UInt8],
+        _ networkId: UInt32,
+        _ accountIndex: UInt32
+    ) async throws -> DelegationRegistration
     public var storeVanPosition: @Sendable (_ roundId: String, _ position: UInt32) async throws -> Void
     public var syncVoteTree: @Sendable (_ roundId: String, _ nodeUrl: String) async throws -> UInt32
     public var generateVanWitness: @Sendable (_ roundId: String, _ anchorHeight: UInt32) async throws -> VanWitness
