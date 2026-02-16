@@ -30,16 +30,15 @@ use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
 
 use crate::{
     circuit::{
+        address_ownership::{prove_address_ownership, spend_auth_g_mul},
         commit_ivk::{CommitIvkChip, CommitIvkConfig},
         gadget::{
             add_chip::{AddChip, AddConfig},
-            assign_free_advice, commit_ivk, derive_nullifier, note_commit, AddInstruction,
+            assign_free_advice, derive_nullifier, note_commit, AddInstruction,
         },
         note_commit::{NoteCommitChip, NoteCommitConfig},
     },
-    constants::{
-        OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains,
-    },
+    constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains},
     keys::{
         CommitIvkRandomness, DiversifiedTransmissionKey, FullViewingKey, NullifierDerivingKey,
         Scope, SpendValidatingKey,
@@ -57,7 +56,7 @@ use crate::{
 use halo2_gadgets::{
     ecc::{
         chip::{EccChip, EccConfig},
-        FixedPoint, NonIdentityPoint, Point, ScalarFixed, ScalarVar,
+        NonIdentityPoint, Point, ScalarFixed, ScalarVar,
     },
     poseidon::{
         primitives::{self as poseidon, ConstantLength},
@@ -76,7 +75,19 @@ use halo2_gadgets::{
     },
 };
 use super::imt::IMT_DEPTH;
+use crate::circuit::van_integrity;
 use crate::constants::MERKLE_DEPTH_ORCHARD;
+
+// ================================================================
+// Circuit size
+// ================================================================
+
+/// Circuit size (2^K rows).
+///
+/// K=14 (16,384 rows) fits all 15 conditions including 4 per-note slots
+/// with Sinsemilla NoteCommit, Merkle paths, IMT non-membership, and
+/// ECC operations.
+pub const K: u32 = 14;
 
 // ================================================================
 // Public input offsets (12 field elements).
@@ -118,12 +129,6 @@ const GOV_NULL_OFFSETS: [usize; 4] = [GOV_NULL_1, GOV_NULL_2, GOV_NULL_3, GOV_NU
 /// cannot substitute a different authority value.
 pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535; // 2^16 - 1
 
-/// Domain tag for Vote Authority Notes (see `spec::DOMAIN_VAN`).
-///
-/// Prepended as the first Poseidon input in `gov_comm` (condition 7) for
-/// domain separation from Vote Commitments in the shared tree.
-pub(crate) const DOMAIN_VAN: u64 = 0;
-
 /// Out-of-circuit rho binding hash used by the builder and tests.
 pub(crate) fn rho_binding_hash(
     cmx_1: pallas::Base,
@@ -138,6 +143,9 @@ pub(crate) fn rho_binding_hash(
 }
 
 /// Out-of-circuit governance commitment hash used by the builder and tests.
+///
+/// Delegates to `van_integrity::van_integrity_hash` with
+/// `MAX_PROPOSAL_AUTHORITY` as the proposal authority (fresh delegation).
 pub(crate) fn gov_commitment_hash(
     g_d_new_x: pallas::Base,
     pk_d_new_x: pallas::Base,
@@ -145,18 +153,14 @@ pub(crate) fn gov_commitment_hash(
     vote_round_id: pallas::Base,
     gov_comm_rand: pallas::Base,
 ) -> pallas::Base {
-    let gov_comm_core =
-        poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init().hash([
-            pallas::Base::from(DOMAIN_VAN),
-            g_d_new_x,
-            pk_d_new_x,
-            v_total,
-            vote_round_id,
-            pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
-        ]);
-
-    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init()
-        .hash([gov_comm_core, gov_comm_rand])
+    van_integrity::van_integrity_hash(
+        g_d_new_x,
+        pk_d_new_x,
+        v_total,
+        vote_round_id,
+        pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
+        gov_comm_rand,
+    )
 }
 
 // ================================================================
@@ -680,6 +684,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             self.g_d_signed.as_ref().map(|gd| gd.to_affine()),
         )?;
 
+        // Witness pk_d_signed (diversified transmission key). Used by condition 5 (address
+        // ownership) and condition 1 (signed note commitment).
+        let pk_d_signed = NonIdentityPoint::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "witness pk_d_signed"),
+            self.pk_d_signed
+                .as_ref()
+                .map(|pk_d_signed| pk_d_signed.inner().to_affine()),
+        )?;
+
         // Witness nk (nullifier deriving key).
         let nk = assign_free_advice(
             layouter.namespace(|| "witness nk"),
@@ -759,28 +773,15 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // rk = [alpha] * SpendAuthG + ak_P
         // ---------------------------------------------------------------
 
-        // Spend authority
-        // Proves that the public rk is a valid rerandomization of the prover's ak.
+        // Spend authority: proves that the public rk is a valid rerandomization of the prover's ak.
         // The out-of-circuit verifier checks that the keystone signature is valid under rk,
         // so this links the ZKP to the signature without revealing ak.
         {
-            // Witness alpha (spend auth randomizer) as a full-width fixed scalar.
             let alpha =
                 ScalarFixed::new(ecc_chip.clone(), layouter.namespace(|| "alpha"), self.alpha)?;
-
-            // alpha_commitment = [alpha] SpendAuthG
-            let (alpha_commitment, _) = {
-                // SpendAuthG is a fixed generator point on the Pallas elliptic curve, used
-                // specifically for spend authorization in the Orchard protocol.
-                let spend_auth_g = OrchardFixedBasesFull::SpendAuthG;
-                let spend_auth_g = FixedPoint::from_inner(ecc_chip.clone(), spend_auth_g);
-                spend_auth_g.mul(layouter.namespace(|| "[alpha] SpendAuthG"), alpha)?
-            };
-
-            // rk = [alpha] SpendAuthG + ak_P
+            let alpha_commitment =
+                spend_auth_g_mul(ecc_chip.clone(), layouter.namespace(|| "cond4"), "[alpha] SpendAuthG", alpha)?;
             let rk = alpha_commitment.add(layouter.namespace(|| "rk"), &ak_P)?;
-
-            // Constrain rk to equal the public inputs (x and y coordinates).
             layouter.constrain_instance(rk.inner().x().cell(), config.primary, RK_X)?;
             layouter.constrain_instance(rk.inner().y().cell(), config.primary, RK_Y)?;
         }
@@ -790,58 +791,27 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // pk_d_signed = [ivk] * g_d_signed.
         // ---------------------------------------------------------------
 
-        // Diversified address integrity.
-        // ivk = ⊥ or pk_d_signed = [ivk] * g_d_signed
-        // where ivk = CommitIvk_rivk(ExtractP(ak_P), nk)
-        //
-        // The ⊥ case is handled internally by CommitDomain::short_commit:
-        // incomplete addition allows ⊥ to occur, and synthesis detects
-        // these edge cases and aborts proof creation.
-        let ivk_cell = {
-            let ivk = {
-                // ExtractP(ak_P) -- extract the x-coordinate from the curve point
-                let ak = ak_P.extract_p().inner().clone();
-                let rivk = ScalarFixed::new(
-                    ecc_chip.clone(),
-                    layouter.namespace(|| "rivk"),
-                    self.rivk.map(|rivk| rivk.inner()),
-                )?;
-
-                // Commit ak and nk with rivk randomness, creating an ivk.
-                commit_ivk(
-                    config.sinsemilla_chip_1(),
-                    ecc_chip.clone(),
-                    config.commit_ivk_chip(),
-                    layouter.namespace(|| "CommitIvk"),
-                    ak,
-                    nk.clone(),
-                    rivk,
-                )?
-            };
-
-            // ivk is internal — NOT constrained to a public input.
-            let ivk_cell = ivk.inner().clone();
-
-            // Convert ivk (an x-coordinate) to a variable-base scalar for EC multiplication.
-            let ivk_scalar =
-                ScalarVar::from_base(ecc_chip.clone(), layouter.namespace(|| "ivk"), ivk.inner())?;
-
-            // [ivk] g_d_signed - derive the expected pk_d
-            let (derived_pk_d_signed, _ivk) =
-                g_d_signed.mul(layouter.namespace(|| "[ivk] g_d_signed"), ivk_scalar)?;
-
-            // Witness pk_d_signed and constrain it to equal the derived value.
-            let pk_d_signed = NonIdentityPoint::new(
-                ecc_chip.clone(),
-                layouter.namespace(|| "witness pk_d_signed"),
-                self.pk_d_signed
-                    .map(|pk_d_signed| pk_d_signed.inner().to_affine()),
-            )?;
-            derived_pk_d_signed
-                .constrain_equal(layouter.namespace(|| "pk_d_signed equality"), &pk_d_signed)?;
-
-            ivk_cell
-        };
+        // Diversified address integrity via shared address_ownership gadget.
+        // ivk = ⊥ or pk_d_signed = [ivk] * g_d_signed where ivk = CommitIvk_rivk(ExtractP(ak_P), nk).
+        // The ⊥ case is handled internally by CommitDomain::short_commit.
+        let ak = ak_P.extract_p().inner().clone();
+        let rivk = ScalarFixed::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "rivk"),
+            self.rivk.map(|rivk| rivk.inner()),
+        )?;
+        let ivk_cell = prove_address_ownership(
+            config.sinsemilla_chip_1(),
+            ecc_chip.clone(),
+            config.commit_ivk_chip(),
+            layouter.namespace(|| "cond5"),
+            "cond5",
+            ak,
+            nk.clone(),
+            rivk,
+            &g_d_signed,
+            &pk_d_signed,
+        )?;
 
         // ---------------------------------------------------------------
         // Condition 1: Signed note commitment integrity.
@@ -1196,7 +1166,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                         || "domain_van",
                         config.advices[0],
                         0,
-                        pallas::Base::from(DOMAIN_VAN),
+                        pallas::Base::from(van_integrity::DOMAIN_VAN),
                     )
                 },
             )?;
@@ -1216,53 +1186,19 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 },
             )?;
 
-            // Poseidon core over the 6 structural fields.
-            let gov_comm_core = {
-                let core_message = [
-                    domain_van,
-                    g_d_new_x,
-                    pk_d_new_x,
-                    v_total.clone(),
-                    vote_round_id_cell,
-                    max_proposal_authority,
-                ];
-                let poseidon_hasher = PoseidonHash::<
-                    pallas::Base,
-                    _,
-                    poseidon::P128Pow5T3,
-                    ConstantLength<6>,
-                    3,
-                    2,
-                >::init(
-                    config.poseidon_chip(),
-                    layouter.namespace(|| "gov_comm_core Poseidon init"),
-                )?;
-                poseidon_hasher.hash(
-                    layouter.namespace(|| {
-                        "Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, round, authority)"
-                    }),
-                    core_message,
-                )?
-            };
-
-            // Finalize with blinding randomness.
-            let derived_gov_comm = {
-                let poseidon_hasher = PoseidonHash::<
-                    pallas::Base,
-                    _,
-                    poseidon::P128Pow5T3,
-                    ConstantLength<2>,
-                    3,
-                    2,
-                >::init(
-                    config.poseidon_chip(),
-                    layouter.namespace(|| "gov_comm finalize Poseidon init"),
-                )?;
-                poseidon_hasher.hash(
-                    layouter.namespace(|| "Poseidon(gov_comm_core, gov_comm_rand)"),
-                    [gov_comm_core, gov_comm_rand],
-                )?
-            };
+            // Two-layer Poseidon hash via the shared VAN integrity gadget.
+            let derived_gov_comm = van_integrity::van_integrity_poseidon(
+                &config.poseidon_config,
+                &mut layouter,
+                "Gov commitment",
+                domain_van,
+                g_d_new_x,
+                pk_d_new_x,
+                v_total.clone(),
+                vote_round_id_cell,
+                max_proposal_authority,
+                gov_comm_rand,
+            )?;
 
             // Constrain: derived_gov_comm == gov_comm (from condition 3).
             layouter.assign_region(
@@ -1957,11 +1893,8 @@ mod tests {
     use pasta_curves::{arithmetic::CurveAffine, pallas};
     use rand::rngs::OsRng;
 
-    /// Size of the delegation circuit (2^K rows).
-    ///
-    /// K=14 (16,384 rows) fits all conditions including 4 per-note slots.
-    /// (Poseidon IMT hashing requires more rows than the former Poseidon2 chip.)
-    const K: u32 = 14;
+    // Re-use the public K constant from the circuit module.
+    use super::K;
 
     /// Helper: build a NoteSlotWitness for a note with a Merkle path and IMT proof.
     fn make_note_slot(
@@ -2062,7 +1995,7 @@ mod tests {
         }
         // IMT proof for real note (from shared provider).
         let real_nf = real_note.nullifier(&fvk);
-        let imt_0 = imt_provider.non_membership_proof(real_nf.0);
+        let imt_0 = imt_provider.non_membership_proof(real_nf.0).unwrap();
         let gov_null_0 = gov_null_hash(nk_val, vote_round_id, real_nf.0);
 
         let slot_0 = make_note_slot(&real_note, &auth_path_0, 0u32, &imt_0, true);
@@ -2087,7 +2020,7 @@ mod tests {
 
             let pad_cmx = ExtractedNoteCommitment::from(pad_note.commitment()).inner();
             let pad_nf = pad_note.nullifier(&fvk);
-            let pad_imt = imt_provider.non_membership_proof(pad_nf.0);
+            let pad_imt = imt_provider.non_membership_proof(pad_nf.0).unwrap();
             let pad_gov_null = gov_null_hash(nk_val, vote_round_id, pad_nf.0);
 
             note_slots.push(make_note_slot(

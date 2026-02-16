@@ -7,6 +7,7 @@
 //! A non-membership proof shows that a nullifier falls within the interval.
 //! Used by the delegation circuit and builder.
 
+use alloc::string::String;
 use ff::PrimeField;
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength};
 use pasta_curves::pallas;
@@ -63,6 +64,19 @@ pub struct ImtProofData {
     pub path: [pallas::Base; IMT_DEPTH],
 }
 
+/// Error type for IMT proof fetching failures.
+#[derive(Clone, Debug)]
+pub struct ImtError(pub String);
+
+impl core::fmt::Display for ImtError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "IMT error: {}", self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ImtError {}
+
 /// Trait for providing IMT non-membership proofs.
 ///
 /// Implementations must return proofs against a consistent root — all proofs
@@ -71,24 +85,21 @@ pub trait ImtProvider {
     /// The current IMT root.
     fn root(&self) -> pallas::Base;
     /// Generate a non-membership proof for the given nullifier.
-    fn non_membership_proof(&self, nf: pallas::Base) -> ImtProofData;
+    fn non_membership_proof(&self, nf: pallas::Base) -> Result<ImtProofData, ImtError>;
 }
 
 // ================================================================
-// Test-only
+// SpacedLeafImtProvider (available for proof generation and tests)
 // ================================================================
 
-#[cfg(any(test, feature = "test-dependencies"))]
 use alloc::vec::Vec;
-#[cfg(any(test, feature = "test-dependencies"))]
 use ff::Field;
 
 /// Precomputed empty subtree hashes for the IMT (Poseidon-based).
 ///
 /// `empty[0] = Poseidon(0, 0)` (hash of an empty (low=0, high=0) leaf),
 /// `empty[i] = Poseidon(empty[i-1], empty[i-1])` for i >= 1.
-#[cfg(any(test, feature = "test-dependencies"))]
-pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
+pub fn empty_imt_hashes() -> Vec<pallas::Base> {
     let empty_leaf = poseidon_hash_2(pallas::Base::zero(), pallas::Base::zero());
     let mut hashes = vec![empty_leaf];
     for _ in 1..=IMT_DEPTH {
@@ -98,13 +109,14 @@ pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
     hashes
 }
 
-/// IMT provider with evenly-spaced brackets for testing ((low, high) leaf model).
+/// IMT provider with evenly-spaced brackets ((low, high) leaf model).
 ///
 /// Creates 17 brackets at intervals of 2^250, covering the entire Pallas field
 /// (p ~= 16.something x 2^250). Each bracket k has low = k*step + 1 and
 /// high = (k+1)*step - 1, stored as (low, high) leaves at positions 0..16 in
 /// a 32-leaf subtree. Any hash-derived nullifier will fall within one bracket.
-#[cfg(any(test, feature = "test-dependencies"))]
+///
+/// Used for proof generation (fixture generators) and testing.
 #[derive(Debug)]
 pub struct SpacedLeafImtProvider {
     /// The root of the IMT.
@@ -117,7 +129,6 @@ pub struct SpacedLeafImtProvider {
     subtree_levels: Vec<Vec<pallas::Base>>,
 }
 
-#[cfg(any(test, feature = "test-dependencies"))]
 impl SpacedLeafImtProvider {
     /// Create a new spaced-leaf IMT provider ((low, high) leaf model).
     ///
@@ -171,13 +182,12 @@ impl SpacedLeafImtProvider {
     }
 }
 
-#[cfg(any(test, feature = "test-dependencies"))]
 impl ImtProvider for SpacedLeafImtProvider {
     fn root(&self) -> pallas::Base {
         self.root
     }
 
-    fn non_membership_proof(&self, nf: pallas::Base) -> ImtProofData {
+    fn non_membership_proof(&self, nf: pallas::Base) -> Result<ImtProofData, ImtError> {
         // Determine which bracket nf falls in: k = nf >> 250.
         // In the LE byte repr, bit 250 is bit 2 of byte 31.
         let repr = nf.to_repr();
@@ -205,12 +215,12 @@ impl ImtProvider for SpacedLeafImtProvider {
             path[l] = empty[l];
         }
 
-        ImtProofData {
+        Ok(ImtProofData {
             root: self.root,
             low,
             high,
             leaf_pos,
             path,
-        }
+        })
     }
 }

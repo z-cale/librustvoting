@@ -58,6 +58,7 @@ use halo2_gadgets::{
     utilities::lookup_range_check::LookupRangeCheckConfig,
 };
 
+mod address_ownership;
 mod commit_ivk;
 #[cfg(feature = "delegation")]
 #[path = "delegation/mod.rs"]
@@ -68,6 +69,7 @@ pub mod delegation;
 pub mod vote_proof;
 pub mod gadget;
 mod note_commit;
+pub mod van_integrity;
 
 pub use crate::Proof;
 

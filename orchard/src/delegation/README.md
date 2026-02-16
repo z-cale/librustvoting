@@ -146,7 +146,7 @@ Where:
 - **alpha** — fresh randomness. If rk were the same across transactions, an observer could link them to the same spender.
 - **SpendAuthG** — the fixed base generator point on the Pallas curve dedicated to spend authorization.
 
-**Constructions:** `EccChip` (ScalarFixed, FixedPoint mul, add).
+**Constructions:** Shared `circuit::address_ownership::spend_auth_g_mul` (fixed-base `[alpha]*SpendAuthG`), then `EccChip` add to get rk.
 
 ## 5. CommitIvk & Diversified Address Integrity
 
@@ -172,7 +172,7 @@ Where:
 - **g_d_signed** — the diversified generator from the note recipient's address.
 - **pk_d_signed** — the diversified transmission key from the note recipient's address.
 
-**Constructions:** `CommitIvkChip`, `SinsemillaChip` (config 1), `EccChip`.
+**Constructions:** Shared `circuit::address_ownership::prove_address_ownership` (CommitIvk + `[ivk]*g_d` + constrain to pk_d). Uses `CommitIvkChip`, `SinsemillaChip` (config 1), `EccChip` internally.
 
 ## 6. Output Note Commitment Integrity
 
@@ -198,7 +198,7 @@ Where:
 
 ## 7. Gov Commitment Integrity
 
-Purpose: prove that the governance commitment (a public input) is correctly derived from the domain tag, the output note's voting hotkey address, the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. Binds the delegated weight, voting hotkey, and authority scope into a single public commitment that ZKP #2 (vote proof) can open. The domain tag provides domain separation from Vote Commitments in the shared vote commitment tree.
+Purpose: prove that the governance commitment (a public input) is correctly derived from the domain tag, the output note's diversified address components (`g_d_new_x`, `pk_d_new_x`), the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. The diversified address binds the VAN to the delegator's key material: `pk_d = [ivk] * g_d` where `ivk` is derived from `(ak, nk)` in condition 5, so the VAN can only be spent by someone who controls the same keys. Binds the delegated weight, address, and authority scope into a single public commitment that ZKP #2 (vote proof) can open. The domain tag provides domain separation from Vote Commitments in the shared vote commitment tree.
 
 ```
 gov_comm_core = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY)
@@ -214,11 +214,15 @@ Where:
 - **MAX_PROPOSAL_AUTHORITY**: `2^16 - 1 = 65535`. A 16-bit bitmask authorizing voting on all 16 proposals. Assigned via `assign_advice_from_constant` so the value is baked into the verification key.
 - **gov_comm_rand**: a random blinding factor. Prevents observers from brute-forcing the address or weight from the public `gov_comm`.
 
-**Function layout:** Two Poseidon hashes:
+**Function layout:** Two Poseidon hashes via the shared `circuit::van_integrity` gadget:
 - `gov_comm_core` uses `ConstantLength<6>` over the structural fields.
 - `gov_comm` finalizes with `ConstantLength<2>` over `(gov_comm_core, gov_comm_rand)`.
 
-**Constructions:** `PoseidonChip`, `AddChip`.
+The same two-layer hash structure is used by ZKP #2 (vote proof, conditions 2 and 6) for cross-circuit interoperability — a VAN created here can be opened by the vote proof circuit.
+
+**Out-of-circuit helper:** `gov_commitment_hash()` delegates to `van_integrity::van_integrity_hash()` with `MAX_PROPOSAL_AUTHORITY` as the proposal authority.
+
+**Constructions:** `van_integrity::van_integrity_poseidon` (shared gadget from `circuit::van_integrity`), `AddChip`.
 
 ## 8. Minimum Voting Weight
 
