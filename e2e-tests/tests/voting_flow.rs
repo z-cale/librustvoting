@@ -28,6 +28,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 const BLOCK_WAIT_MS: u64 = 6000;
+// Must match orchard::vote_proof::builder::BALLOT_DIVISOR.
+const BALLOT_DIVISOR: u64 = 12_500_000;
 
 fn log_step(step: &str, msg: &str) {
     eprintln!("[E2E] {}: {}", step, msg);
@@ -556,11 +558,21 @@ fn voting_flow_full_lifecycle() {
     assert_eq!(status, 200, "GET tally-results: expected 200, got {} body={:?}", status, json);
     let results = json.get("results").and_then(|r| r.as_array()).expect("results");
     assert!(!results.is_empty());
-    // Auto-tally decrypts the accumulated ciphertext from 2 of 4 shares.
-    // Each share = 15_000_000 / 4 = 3_750_000; two shares sum to 7_500_000.
+    // Auto-tally decrypts ballot-count shares (not raw zatoshi shares).
+    // vote_proof splits num_ballots = floor(total_note_value / BALLOT_DIVISOR)
+    // into [quarter, quarter, quarter, remainder]. We reveal indices 0 and 1.
     assert_eq!(results[0].get("vote_decision").and_then(|v| v.as_u64()).unwrap_or(0), 1);
     let total_value = results[0].get("total_value").and_then(|v| v.as_u64()).unwrap_or(0);
-    assert_eq!(total_value, 7_500_000, "expected 2 of 4 shares from 15M note = 7.5M, got {}", total_value);
+    let num_ballots = vote_proof_data.total_note_value / BALLOT_DIVISOR;
+    let quarter = num_ballots / 4;
+    let expected_revealed_total = quarter * 2; // revealed shares 0 and 1
+    assert_eq!(
+        total_value,
+        expected_revealed_total,
+        "expected decrypted total from shares[0]+shares[1] = {}, got {}",
+        expected_revealed_total,
+        total_value
+    );
 
     log_step("Done", "voting flow happy path passed");
 }
