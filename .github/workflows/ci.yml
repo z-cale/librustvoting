@@ -90,7 +90,6 @@ jobs:
 
   test-halo2:
     name: Halo2 ZKP Verification Tests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
