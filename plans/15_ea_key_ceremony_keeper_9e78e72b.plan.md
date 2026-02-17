@@ -19,7 +19,7 @@ todos:
     status: done
   - id: step6-ack
     content: "Step 6: MsgAckExecutiveAuthorityKey handler -- implement handler + tests (valid ack, reject duplicates, reject non-validator, all-ack triggers DEALT->CONFIRMED transition)"
-    status: pending
+    status: done
   - id: step7-timeout
     content: "Step 7: EndBlocker timeout -- add ceremony timeout logic to EndBlock; test partial-ack timeout->CONFIRMED and zero-ack timeout->ABORTED"
     status: pending
