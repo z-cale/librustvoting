@@ -22,10 +22,10 @@ todos:
     status: done
   - id: step7-timeout
     content: "Step 7: EndBlocker timeout -- add ceremony timeout logic to EndBlock; test partial-ack timeout->CONFIRMED and zero-ack timeout->ABORTED"
-    status: pending
+    status: done
   - id: step8-gate
     content: "Step 8: CreateVotingSession ceremony gate -- update handler to read ceremony ea_pk, reject if not CONFIRMED; update existing tests to seed ceremony state"
-    status: pending
+    status: done
   - id: step9-wiring
     content: "Step 9: Module wiring -- add signers, RegisterInterfaces, register Msg RPCs in module.go"
     status: pending
