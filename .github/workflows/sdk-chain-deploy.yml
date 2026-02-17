@@ -6,7 +6,7 @@ name: Deploy SDK chain
 
 on:
   push:
-    branches: [main]
+    branches: [main, adam/helper-go-port]
     paths:
       - 'sdk/**'
   workflow_dispatch: # allow manual run
@@ -94,6 +94,15 @@ jobs:
           source: "zallyd,init.sh"
           target: ${{ env.DEPLOY_PATH }}
 
+      - name: Stop service before reinit
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            sudo systemctl stop zallyd || true
+
       - name: Initialize chain
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -105,14 +114,14 @@ jobs:
             chmod +x ${{ env.DEPLOY_PATH }}/zallyd
             bash ${{ env.DEPLOY_PATH }}/init.sh
 
-      - name: Restart service
+      - name: Start service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            sudo systemctl restart zallyd
+            sudo systemctl start zallyd
 
       - name: Verify systemd service active
         uses: appleboy/ssh-action@v1.0.3
