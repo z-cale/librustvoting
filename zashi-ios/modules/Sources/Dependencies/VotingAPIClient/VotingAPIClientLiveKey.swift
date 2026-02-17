@@ -298,6 +298,7 @@ extension VotingAPIClient: DependencyKey {
                             "c2": payload.encShare.c2.base64EncodedString(),
                             "share_index": payload.encShare.shareIndex
                         ],
+                        "share_index": payload.encShare.shareIndex,
                         "tree_position": payload.treePosition,
                         "vote_round_id": roundIdHex,
                         "all_enc_shares": allEncSharesJSON
