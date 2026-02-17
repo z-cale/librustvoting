@@ -2229,6 +2229,7 @@ public struct SharePayload {
     public var treePosition: UInt64
     /**
      * All 4 encrypted shares (needed for ZKP #3 shares_hash witness).
+     * TODO: This is a temp hack
      */
     public var allEncShares: [EncryptedShare]
 
@@ -2237,6 +2238,7 @@ public struct SharePayload {
     public init(sharesHash: Data, proposalId: UInt32, voteDecision: UInt32, encShare: EncryptedShare, treePosition: UInt64,
         /**
          * All 4 encrypted shares (needed for ZKP #3 shares_hash witness).
+         * TODO: This is a temp hack
          */allEncShares: [EncryptedShare]) {
         self.sharesHash = sharesHash
         self.proposalId = proposalId
@@ -3594,6 +3596,17 @@ public func encryptShares(shares: [UInt64], eaPk: Data)throws  -> [EncryptedShar
     )
 })
 }
+/**
+ * Extract the Orchard note commitment tree root from a protobuf-encoded TreeState.
+ * Returns the 32-byte nc_root needed when creating a voting session.
+ */
+public func extractNcRoot(treeStateBytes: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
+    uniffi_zcash_voting_ffi_fn_func_extract_nc_root(
+        FfiConverterData.lower(treeStateBytes),$0
+    )
+})
+}
 public func extractSpendAuthSig(signedPcztBytes: Data, actionIndex: UInt32)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_func_extract_spend_auth_sig(
@@ -3695,6 +3708,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_func_encrypt_shares() != 61125) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zcash_voting_ffi_checksum_func_extract_nc_root() != 12696) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_func_extract_spend_auth_sig() != 27072) {

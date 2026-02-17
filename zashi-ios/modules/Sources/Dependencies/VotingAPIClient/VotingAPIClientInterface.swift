@@ -22,4 +22,6 @@ public struct VotingAPIClient {
     public var delegateShares: @Sendable (_ payloads: [SharePayload], _ roundIdHex: String) async throws -> Void
     public var fetchProposalTally: @Sendable (_ roundId: Data, _ proposalId: UInt32) async throws -> TallyResult
     public var awaitCommitmentTreeGrowth: @Sendable (_ previousNextIndex: UInt64, _ timeoutSeconds: TimeInterval) async throws -> CommitmentTreeState
+    /// Create a new voting session on chain (dev/test only).
+    public var createTestSession: @Sendable (_ payload: [String: Any]) async throws -> Void
 }

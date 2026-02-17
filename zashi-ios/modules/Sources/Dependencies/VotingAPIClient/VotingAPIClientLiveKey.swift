@@ -336,6 +336,9 @@ extension VotingAPIClient: DependencyKey {
                     try await Task.sleep(for: .seconds(1))
                 }
                 throw ZallyAPIError.commitmentTreeTimeout(seconds: timeoutSeconds)
+            },
+            createTestSession: { payload in
+                _ = try await postJSON("/zally/v1/create-voting-session", body: payload)
             }
         )
     }

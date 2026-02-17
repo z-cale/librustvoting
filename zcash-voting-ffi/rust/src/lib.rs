@@ -1292,6 +1292,13 @@ pub fn sign_cast_vote(
     .into())
 }
 
+/// Extract the Orchard note commitment tree root from a protobuf-encoded TreeState.
+/// Returns the 32-byte nc_root needed when creating a voting session.
+#[uniffi::export]
+pub fn extract_nc_root(tree_state_bytes: Vec<u8>) -> Result<Vec<u8>, VotingError> {
+    Ok(voting::extract_nc_root(&tree_state_bytes)?)
+}
+
 #[uniffi::export]
 pub fn voting_ffi_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

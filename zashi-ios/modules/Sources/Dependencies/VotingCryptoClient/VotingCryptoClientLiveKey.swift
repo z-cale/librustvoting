@@ -516,6 +516,9 @@ extension VotingCryptoClient: DependencyKey {
                     sighash: ffiSig.sighash,
                     voteAuthSig: ffiSig.voteAuthSig
                 )
+            },
+            extractNcRoot: { treeStateBytes in
+                try ZcashVotingFFI.extractNcRoot(treeStateBytes: treeStateBytes)
             }
         )
     }

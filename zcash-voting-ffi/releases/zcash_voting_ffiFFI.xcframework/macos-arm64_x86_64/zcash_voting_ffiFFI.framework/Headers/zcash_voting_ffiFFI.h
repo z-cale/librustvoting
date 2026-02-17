@@ -416,6 +416,11 @@ RustBuffer uniffi_zcash_voting_ffi_fn_func_decompose_weight(uint64_t weight, Rus
 RustBuffer uniffi_zcash_voting_ffi_fn_func_encrypt_shares(RustBuffer shares, RustBuffer ea_pk, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_FN_FUNC_EXTRACT_NC_ROOT
+#define UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_FN_FUNC_EXTRACT_NC_ROOT
+RustBuffer uniffi_zcash_voting_ffi_fn_func_extract_nc_root(RustBuffer tree_state_bytes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_FN_FUNC_EXTRACT_SPEND_AUTH_SIG
 #define UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_FN_FUNC_EXTRACT_SPEND_AUTH_SIG
 RustBuffer uniffi_zcash_voting_ffi_fn_func_extract_spend_auth_sig(RustBuffer signed_pczt_bytes, uint32_t action_index, RustCallStatus *_Nonnull out_status
@@ -765,6 +770,12 @@ uint16_t uniffi_zcash_voting_ffi_checksum_func_decompose_weight(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_CHECKSUM_FUNC_ENCRYPT_SHARES
 #define UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_CHECKSUM_FUNC_ENCRYPT_SHARES
 uint16_t uniffi_zcash_voting_ffi_checksum_func_encrypt_shares(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_CHECKSUM_FUNC_EXTRACT_NC_ROOT
+#define UNIFFI_FFIDEF_UNIFFI_ZCASH_VOTING_FFI_CHECKSUM_FUNC_EXTRACT_NC_ROOT
+uint16_t uniffi_zcash_voting_ffi_checksum_func_extract_nc_root(void
 
 );
 #endif
