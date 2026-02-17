@@ -31,7 +31,7 @@ todos:
     status: pending
   - id: step10-e2e
     content: "Step 10: Full ceremony integration test -- end-to-end flow with real ECIES crypto: register 3 validators, deal with real encryption, ack, confirm, create voting session"
-    status: pending
+    status: done
 isProject: false
 ---
 
