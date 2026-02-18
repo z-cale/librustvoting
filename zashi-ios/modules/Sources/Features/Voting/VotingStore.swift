@@ -18,9 +18,6 @@ import WalletStorage
 import ZcashSDKEnvironment
 import ZcashLightClientKit
 
-/// Nullifier IMT server used for ZKP #1 exclusion proofs.
-private let imtServerBaseUrl = "http://46.101.255.48:3000"
-
 private enum VotingFlowError: LocalizedError {
     case missingActiveSession
     case missingSigningAccount
@@ -47,17 +44,6 @@ private enum VotingFlowError: LocalizedError {
     }
 }
 
-private enum ZallyTestRoundError: LocalizedError {
-    case invalidIMTResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidIMTResponse:
-            return "Invalid response from IMT server /root endpoint"
-        }
-    }
-}
-
 @Reducer
 public struct Voting {
     @Dependency(\.databaseFiles) var databaseFiles
@@ -77,6 +63,9 @@ public struct Voting {
             case proposalList
             case proposalDetail(id: UInt32)
             case complete
+            case ineligible
+            case tallying
+            case results
         }
 
         public struct PendingVote: Equatable {
@@ -113,6 +102,11 @@ public struct Voting {
             case failed(String)
         }
 
+        public enum IneligibilityReason: Equatable {
+            case noNotes
+            case balanceTooLow
+        }
+
         public var screenStack: [Screen] = [.loading]
         public var votingRound: VotingRound
         public var votes: [UInt32: VoteChoice] = [:]
@@ -120,6 +114,20 @@ public struct Voting {
         public var isKeystoneUser: Bool
         public var roundId: String
         public var activeSession: VotingSession?
+
+        /// Resolved service config from CDN or local override.
+        public var serviceConfig: VotingServiceConfig?
+
+        /// Tally results for finalized rounds (proposalId → TallyResult).
+        public var tallyResults: [UInt32: TallyResult] = [:]
+        public var isLoadingTallyResults: Bool = false
+
+        /// Reason the user can't participate (set when navigating to .ineligible).
+        public var ineligibilityReason: IneligibilityReason?
+
+        /// Per-proposal share confirmation tracking (proposalId → confirmed count 0-4).
+        public var shareConfirmations: [UInt32: Int] = [:]
+        public var isPollingShareConfirmations: Bool = false
 
         /// Cached wallet notes from the snapshot query, used by delegation proof.
         public var walletNotes: [NoteInfo] = []
@@ -162,11 +170,6 @@ public struct Voting {
         public var isSubmittingVote: Bool = false
         /// Error from the last vote submission attempt.
         public var voteSubmissionError: String?
-
-        /// Whether a test round creation is in progress.
-        public var isCreatingTestRound: Bool = false
-        /// Error from the last test round creation attempt.
-        public var testRoundError: String?
 
         public var currentScreen: Screen {
             screenStack.last ?? .proposalList
@@ -236,6 +239,8 @@ public struct Voting {
     }
 
     let cancelStateStreamId = UUID()
+    let cancelStatusPollingId = UUID()
+    let cancelSharePollingId = UUID()
 
     public enum Action: Equatable {
         // Navigation
@@ -244,7 +249,9 @@ public struct Voting {
 
         // Initialization (DB, wallet notes, hotkey)
         case initialize
+        case serviceConfigLoaded(VotingServiceConfig)
         case activeSessionLoaded(VotingSession)
+        case noActiveRound
         case votingWeightLoaded(UInt64, [NoteInfo])
         case initializeFailed(String)
         case hotkeyLoaded(String)
@@ -294,10 +301,17 @@ public struct Voting {
         case nextProposalDetail
         case previousProposalDetail
 
-        // Test round creation (dev only)
-        case createTestRound
-        case testRoundCreated
-        case testRoundFailed(String)
+        // Round status polling
+        case startRoundStatusPolling
+        case roundStatusUpdated(SessionStatus)
+
+        // Tally results
+        case fetchTallyResults
+        case tallyResultsLoaded([UInt32: TallyResult])
+
+        // Share confirmation polling
+        case startShareConfirmationPolling(UInt32)
+        case shareConfirmationsUpdated(UInt32, Int)
 
         // Complete
         case doneTapped
@@ -311,7 +325,11 @@ public struct Voting {
             // MARK: - Navigation
 
             case .dismissFlow:
-                return .cancel(id: cancelStateStreamId)
+                return .merge(
+                    .cancel(id: cancelStateStreamId),
+                    .cancel(id: cancelStatusPollingId),
+                    .cancel(id: cancelSharePollingId)
+                )
 
             case .goBack:
                 if state.screenStack.count > 1 {
@@ -322,26 +340,60 @@ public struct Voting {
             // MARK: - Initialization
 
             case .initialize:
-                // Non-Keystone users skip the delegation signing screen entirely —
-                // set this synchronously so they never see it flash.
-                if !state.isKeystoneUser {
-                    state.screenStack = [.proposalList]
+                return .run { [votingAPI] send in
+                    // 1. Fetch service config (local override → CDN → localhost fallback)
+                    let config = try await votingAPI.fetchServiceConfig()
+                    await send(.serviceConfigLoaded(config))
+                } catch: { error, send in
+                    print("[Voting] Service config fetch failed: \(error)")
+                    await send(.serviceConfigLoaded(.localhost))
                 }
 
+            case .serviceConfigLoaded(let config):
+                state.serviceConfig = config
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
+                let isKeystoneUser = state.isKeystoneUser
                 return .run { [votingAPI, votingCrypto, mnemonic, walletStorage] send in
-                    // Open the voting database (needed for FFI method)
+                    // 2. Configure API client URLs
+                    await votingAPI.configureURLs(config)
+
+                    // 3. Open voting database
                     let dbPath = FileManager.default
                         .urls(for: .documentDirectory, in: .userDomainMask)[0]
                         .appendingPathComponent("voting.sqlite3").path
                     try await votingCrypto.openDatabase(dbPath)
 
-                    let activeSession = try await votingAPI.fetchActiveVotingSession()
-                    let snapshotHeight = activeSession.snapshotHeight
-                    let roundId = activeSession.voteRoundId.hexString
-                    await send(.activeSessionLoaded(activeSession))
+                    // 4. Fetch all rounds and pick the most relevant one
+                    let allRounds = try await votingAPI.fetchAllRounds()
+                    let activeRounds = allRounds.filter { $0.status == .active }
+                    let tallyingRounds = allRounds.filter { $0.status == .tallying }
+                    let finalizedRounds = allRounds.filter { $0.status == .finalized }
+
+                    let selectedSession: VotingSession?
+                    if let active = activeRounds.first {
+                        selectedSession = active
+                    } else if let tallying = tallyingRounds.first {
+                        selectedSession = tallying
+                    } else if let finalized = finalizedRounds.last {
+                        selectedSession = finalized
+                    } else {
+                        selectedSession = nil
+                    }
+
+                    guard let session = selectedSession else {
+                        await send(.noActiveRound)
+                        return
+                    }
+
+                    await send(.activeSessionLoaded(session))
+
+                    // For ACTIVE rounds, load wallet notes and hotkey
+                    guard session.status == .active else { return }
+
+                    let snapshotHeight = session.snapshotHeight
+                    let roundId = session.voteRoundId.hexString
 
                     let notes = try await votingCrypto.getWalletNotes(
                         walletDbPath, snapshotHeight, networkId
@@ -367,7 +419,7 @@ public struct Voting {
                         print("[Voting] Failed to generate hotkey: \(error)")
                     }
                 } catch: { error, send in
-                    print("[Voting] Failed to load wallet notes: \(error)")
+                    print("[Voting] Initialization failed: \(error)")
                     await send(.initializeFailed(error.localizedDescription))
                 }
 
@@ -376,11 +428,42 @@ public struct Voting {
                 state.roundId = session.voteRoundId.hexString
                 state.votingRound = sessionBackedRound(from: session, fallback: state.votingRound)
                 reconcileProposalState(&state)
+
+                // Route based on session status
+                switch session.status {
+                case .active:
+                    // Non-Keystone users skip the delegation signing screen
+                    if !state.isKeystoneUser {
+                        state.screenStack = [.proposalList]
+                    }
+                    return .send(.startRoundStatusPolling)
+                case .tallying:
+                    state.screenStack = [.tallying]
+                    return .send(.startRoundStatusPolling)
+                case .finalized:
+                    state.screenStack = [.results]
+                    return .send(.fetchTallyResults)
+                case .unspecified:
+                    return .none
+                }
+
+            case .noActiveRound:
+                state.activeSession = nil
+                state.screenStack = [.proposalList]
                 return .none
 
             case .votingWeightLoaded(let weight, let notes):
                 state.votingWeight = weight
                 state.walletNotes = notes
+                if notes.isEmpty {
+                    state.ineligibilityReason = .noNotes
+                    state.screenStack = [.ineligible]
+                    return .none
+                } else if weight < 12_500_000 {
+                    state.ineligibilityReason = .balanceTooLow
+                    state.screenStack = [.ineligible]
+                    return .none
+                }
                 return .send(.verifyWitnesses)
 
             case .initializeFailed(let error):
@@ -389,6 +472,107 @@ public struct Voting {
 
             case .hotkeyLoaded(let address):
                 state.hotkeyAddress = address
+                return .none
+
+            // MARK: - Round Status Polling
+
+            case .startRoundStatusPolling:
+                guard let session = state.activeSession else { return .none }
+                let roundIdHex = session.voteRoundId.hexString
+                return .run { [votingAPI] send in
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(5))
+                        let updated = try await votingAPI.fetchRoundById(roundIdHex)
+                        await send(.roundStatusUpdated(updated.status))
+                    }
+                } catch: { error, _ in
+                    print("[Voting] Status polling error: \(error)")
+                }
+                .cancellable(id: cancelStatusPollingId, cancelInFlight: true)
+
+            case .roundStatusUpdated(let newStatus):
+                guard let session = state.activeSession else { return .none }
+                // Only react to actual transitions
+                guard newStatus != session.status else { return .none }
+
+                // Update session status
+                state.activeSession = VotingSession(
+                    voteRoundId: session.voteRoundId,
+                    snapshotHeight: session.snapshotHeight,
+                    snapshotBlockhash: session.snapshotBlockhash,
+                    proposalsHash: session.proposalsHash,
+                    voteEndTime: session.voteEndTime,
+                    eaPK: session.eaPK,
+                    vkZkp1: session.vkZkp1,
+                    vkZkp2: session.vkZkp2,
+                    vkZkp3: session.vkZkp3,
+                    ncRoot: session.ncRoot,
+                    nullifierIMTRoot: session.nullifierIMTRoot,
+                    creator: session.creator,
+                    proposals: session.proposals,
+                    status: newStatus
+                )
+
+                switch newStatus {
+                case .tallying:
+                    state.screenStack = [.tallying]
+                    return .none
+                case .finalized:
+                    state.screenStack = [.results]
+                    return .merge(
+                        .cancel(id: cancelStatusPollingId),
+                        .send(.fetchTallyResults)
+                    )
+                default:
+                    return .none
+                }
+
+            // MARK: - Tally Results
+
+            case .fetchTallyResults:
+                guard let session = state.activeSession else { return .none }
+                state.isLoadingTallyResults = true
+                let roundIdHex = session.voteRoundId.hexString
+                return .run { [votingAPI] send in
+                    let results = try await votingAPI.fetchTallyResults(roundIdHex)
+                    await send(.tallyResultsLoaded(results))
+                } catch: { error, send in
+                    print("[Voting] Failed to fetch tally results: \(error)")
+                    await send(.tallyResultsLoaded([:]))
+                }
+
+            case .tallyResultsLoaded(let results):
+                state.tallyResults = results
+                state.isLoadingTallyResults = false
+                return .none
+
+            // MARK: - Share Confirmation Polling
+
+            case .startShareConfirmationPolling(let proposalId):
+                state.isPollingShareConfirmations = true
+                guard let session = state.activeSession else { return .none }
+                let roundIdHex = session.voteRoundId.hexString
+                return .run { [votingAPI] send in
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(5))
+                        // Check tally endpoint for reveal-share counts
+                        let tally = try await votingAPI.fetchProposalTally(
+                            dataFromHex(roundIdHex), proposalId
+                        )
+                        let totalShares = tally.entries.reduce(0) { $0 + Int($1.amount) }
+                        await send(.shareConfirmationsUpdated(proposalId, min(totalShares, 4)))
+                    }
+                } catch: { error, _ in
+                    print("[Voting] Share confirmation polling error: \(error)")
+                }
+                .cancellable(id: cancelSharePollingId, cancelInFlight: true)
+
+            case .shareConfirmationsUpdated(let proposalId, let count):
+                state.shareConfirmations[proposalId] = count
+                if count >= 4 {
+                    state.isPollingShareConfirmations = false
+                    return .cancel(id: cancelSharePollingId)
+                }
                 return .none
 
             // MARK: - Witness Verification
@@ -594,9 +778,8 @@ public struct Voting {
                 let accountIndex: UInt32 = 0
                 let isKeystoneUser = state.isKeystoneUser
                 let roundName = state.votingRound.title
-                // TODO: Source from VotingSession or server config once the nullifier-ingest
-                // service endpoint is deployed.
-                let imtServerUrl = imtServerBaseUrl
+                // IMT server URL from resolved service config
+                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "http://localhost:3000"
                 return .merge(
                     // Subscribe to DB state stream (follows SDKSynchronizer pattern)
                     .publisher {
@@ -717,9 +900,6 @@ public struct Voting {
                 return .none
 
             case .spendAuthSignatureExtracted:
-                // TODO: Store spendAuthSig in DB for on-chain submission.
-                // The sig is extracted from the Keystone-signed PCZT but not yet
-                // persisted — it will be needed when the cosmos submission flow is built.
                 guard let activeSession = state.activeSession else {
                     return .send(.delegationProofFailed(
                         VotingFlowError.missingActiveSession.localizedDescription
@@ -737,10 +917,8 @@ public struct Voting {
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let accountIndex: UInt32 = 0
-                // TODO: Source from VotingSession or server config once the nullifier-ingest
-                // service endpoint is deployed. For now, the Rust side fetches IMT proofs from
-                // this URL for each note's nullifier.
-                let imtServerUrl = imtServerBaseUrl
+                // IMT server URL from resolved service config
+                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "http://localhost:3000"
                 return .run { [votingCrypto, votingAPI, mnemonic, walletStorage] send in
                     let senderPhrase = try walletStorage.exportWallet().seedPhrase.value()
                     let senderSeed = try mnemonic.toSeed(senderPhrase)
@@ -837,6 +1015,7 @@ public struct Voting {
                 let network = zcashSDKEnvironment.network
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let nextId = nextUnvotedId(after: proposalId, in: state)
+                let chainNodeUrl = state.serviceConfig?.voteServers.first?.url ?? "http://localhost:1318"
 
                 return .run { [votingAPI, votingCrypto, mnemonic, walletStorage] send in
                     // Derive hotkey seed (same seed used during delegation)
@@ -845,7 +1024,6 @@ public struct Voting {
 
                     // Sync vote commitment tree from chain and generate VAN witness.
                     // Requires storeVanPosition to have been called after delegation TX.
-                    let chainNodeUrl = ZallyAPIConfig.baseURL
                     let anchorHeight = try await votingCrypto.syncVoteTree(roundId, chainNodeUrl)
                     let vanWitness = try await votingCrypto.generateVanWitness(roundId, anchorHeight)
                     print("[Voting] VAN witness: position=\(vanWitness.position), anchor=\(vanWitness.anchorHeight)")
@@ -960,86 +1138,6 @@ public struct Voting {
                 }
                 return .none
 
-            // MARK: - Test Round Creation
-
-            case .createTestRound:
-                state.isCreatingTestRound = true
-                state.testRoundError = nil
-                let snapshotHeight: UInt64 = 3_235_470
-                return .run { [sdkSynchronizer, votingCrypto, votingAPI] send in
-                    // 1. Fetch tree state at snapshot height from lightwalletd
-                    let treeStateBytes = try await sdkSynchronizer.getTreeState(snapshotHeight)
-
-                    // 2. Extract nc_root from tree state
-                    let ncRoot = try votingCrypto.extractNcRoot(treeStateBytes)
-                    print("[Voting] nc_root: \(ncRoot.hexString)")
-
-                    // 3. Fetch nullifier_imt_root from IMT server
-                    guard let imtURL = URL(string: "\(imtServerBaseUrl)/root") else {
-                        throw VotingFlowError.missingActiveSession
-                    }
-                    let (imtData, _) = try await URLSession.shared.data(from: imtURL)
-                    guard let imtJson = try JSONSerialization.jsonObject(with: imtData) as? [String: Any],
-                          let rootHex = imtJson["root"] as? String else {
-                        throw ZallyTestRoundError.invalidIMTResponse
-                    }
-                    let nullifierImtRoot = Data(hexString: rootHex)
-                    print("[Voting] nullifier_imt_root: \(nullifierImtRoot.hexString)")
-
-                    // 4. Build session payload (ea_pk omitted — the chain auto-fills it)
-                    let voteEndTime = Int(Date().addingTimeInterval(5 * 24 * 3600).timeIntervalSince1970)
-                    let proposals: [[String: Any]] = MockVotingService.proposals.map { p in
-                        [
-                            "id": p.id,
-                            "title": p.title,
-                            "description": p.description
-                        ]
-                    }
-
-                    let payload: [String: Any] = [
-                        "creator": "zvote1admin",
-                        "snapshot_height": snapshotHeight,
-                        "snapshot_blockhash": Data(repeating: 0xAA, count: 32).base64EncodedString(),
-                        "proposals_hash": Data(repeating: 0xBB, count: 32).base64EncodedString(),
-                        "vote_end_time": voteEndTime,
-                        "nc_root": ncRoot.base64EncodedString(),
-                        "nullifier_imt_root": nullifierImtRoot.base64EncodedString(),
-                        "vk_zkp1": Data(repeating: 0xF1, count: 64).base64EncodedString(),
-                        "vk_zkp2": Data(repeating: 0xF2, count: 64).base64EncodedString(),
-                        "vk_zkp3": Data(repeating: 0xF3, count: 64).base64EncodedString(),
-                        "proposals": proposals
-                    ]
-
-                    // 5. POST to chain
-                    try await votingAPI.createTestSession(payload)
-                    print("[Voting] Test session created successfully")
-
-                    // 6. Poll until the new round is queryable (TX needs to land in a block)
-                    let deadline = Date().addingTimeInterval(30)
-                    while Date() < deadline {
-                        if let _ = try? await votingAPI.fetchActiveVotingSession() {
-                            break
-                        }
-                        try await Task.sleep(for: .seconds(1))
-                    }
-
-                    await send(.testRoundCreated)
-                } catch: { error, send in
-                    print("[Voting] Test round creation failed: \(error)")
-                    await send(.testRoundFailed(error.localizedDescription))
-                }
-
-            case .testRoundCreated:
-                state.isCreatingTestRound = false
-                state.testRoundError = nil
-                // Re-initialize the entire flow — new session should now be active
-                return .send(.initialize)
-
-            case .testRoundFailed(let error):
-                state.isCreatingTestRound = false
-                state.testRoundError = error
-                return .none
-
             // MARK: - Complete
 
             case .doneTapped:
@@ -1097,4 +1195,18 @@ public struct Voting {
             state.screenStack.append(.proposalList)
         }
     }
+}
+
+/// Convert hex string to Data (used for share confirmation polling).
+private func dataFromHex(_ hex: String) -> Data {
+    var data = Data()
+    var idx = hex.startIndex
+    while idx < hex.endIndex {
+        let next = hex.index(idx, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+        if let byte = UInt8(hex[idx..<next], radix: 16) {
+            data.append(byte)
+        }
+        idx = next
+    }
+    return data
 }
