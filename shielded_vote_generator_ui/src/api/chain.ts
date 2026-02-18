@@ -88,6 +88,24 @@ export interface BroadcastResult {
   log?: string;
 }
 
+export interface HelperQueueStatus {
+  total: number;
+  pending: number;
+  submitted: number;
+  failed: number;
+}
+
+export interface HelperTreeStatus {
+  leaf_count: number;
+  anchor_height: number;
+}
+
+export interface HelperStatus {
+  status: string;
+  queues: Record<string, HelperQueueStatus>;
+  tree?: HelperTreeStatus;
+}
+
 // -- API methods --
 
 export async function getCeremonyState(): Promise<CeremonyState> {
@@ -99,6 +117,10 @@ export const testConnection = getCeremonyState;
 
 export async function getVoteManager(): Promise<{ address: string }> {
   return fetchJson<{ address: string }>("/zally/v1/vote-manager");
+}
+
+export async function getHelperStatus(): Promise<HelperStatus> {
+  return fetchJson<HelperStatus>("/api/v1/status");
 }
 
 export async function setVoteManager(

@@ -574,6 +574,7 @@ function SettingsPage() {
   const [connStatus, setConnStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [connError, setConnError] = useState("");
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
+  const [helperStatus, setHelperStatus] = useState<chainApi.HelperStatus | null>(null);
   const [voteManager, setVoteManager] = useState<string>("");
   const [vmCreator, setVmCreator] = useState("");
   const [vmNewAddr, setVmNewAddr] = useState("");
@@ -595,10 +596,14 @@ function SettingsPage() {
     setConnStatus("testing");
     setConnError("");
     try {
-      const state = await chainApi.testConnection();
+      const [state, vm, helper] = await Promise.all([
+        chainApi.testConnection(),
+        chainApi.getVoteManager(),
+        chainApi.getHelperStatus().catch(() => null),
+      ]);
       setCeremony(state);
-      const vm = await chainApi.getVoteManager();
       setVoteManager(vm.address || "");
+      setHelperStatus(helper);
       setConnStatus("ok");
     } catch (err) {
       setConnError(err instanceof Error ? err.message : String(err));
@@ -884,6 +889,65 @@ function SettingsPage() {
                   )}
                 </div>
               </details>
+            </div>
+          )}
+
+          {/* Helper server status (shown when connected) */}
+          {connStatus === "ok" && helperStatus && (
+            <div className="border-t border-border-subtle pt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-text-secondary">Helper server</span>
+                <span className="text-[11px] text-success flex items-center gap-1">
+                  <CheckCircle2 size={10} /> {helperStatus.status}
+                </span>
+              </div>
+              {helperStatus.tree && (
+                <>
+                  <SettingsStubRow
+                    label="Commitment leaves"
+                    value={helperStatus.tree.leaf_count.toLocaleString()}
+                  />
+                  <SettingsStubRow
+                    label="Anchor height"
+                    value={helperStatus.tree.anchor_height.toLocaleString()}
+                  />
+                </>
+              )}
+              {Object.keys(helperStatus.queues).length > 0 && (
+                <>
+                  {Object.entries(helperStatus.queues).map(([roundId, q]) => (
+                    <div key={roundId} className="bg-surface-2 rounded-lg px-3 py-2 space-y-1">
+                      <p className="text-[10px] text-text-muted font-mono truncate">
+                        {roundId.slice(0, 16)}...
+                      </p>
+                      <div className="flex gap-3 text-[10px]">
+                        <span className="text-text-secondary">
+                          {q.pending} pending
+                        </span>
+                        <span className="text-success">
+                          {q.submitted} submitted
+                        </span>
+                        {q.failed > 0 && (
+                          <span className="text-danger">
+                            {q.failed} failed
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+              {Object.keys(helperStatus.queues).length === 0 && (
+                <p className="text-[10px] text-text-muted">No shares in queue</p>
+              )}
+            </div>
+          )}
+          {connStatus === "ok" && !helperStatus && (
+            <div className="border-t border-border-subtle pt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-text-secondary">Helper server</span>
+                <span className="text-[11px] text-text-muted italic">disabled</span>
+              </div>
             </div>
           )}
 

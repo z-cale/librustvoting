@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
           target: chainUrl,
           changeOrigin: true,
         },
+        '/api': {
+          target: chainUrl,
+          changeOrigin: true,
+        },
         '/nullifier': {
           target: nullifierUrl,
           changeOrigin: true,
