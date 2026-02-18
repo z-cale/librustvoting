@@ -36,6 +36,9 @@ public struct VotingView: View {
         case .proposalList: return "proposalList"
         case .proposalDetail(let id): return "detail-\(id)"
         case .complete: return "complete"
+        case .ineligible: return "ineligible"
+        case .tallying: return "tallying"
+        case .results: return "results"
         }
     }
 
@@ -56,6 +59,12 @@ public struct VotingView: View {
             }
         case .complete:
             VoteCompletionView(store: store)
+        case .ineligible:
+            IneligibleView(store: store)
+        case .tallying:
+            TallyingView(store: store)
+        case .results:
+            ResultsView(store: store)
         }
     }
 }
