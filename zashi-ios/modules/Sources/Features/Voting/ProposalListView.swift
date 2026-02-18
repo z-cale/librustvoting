@@ -37,16 +37,16 @@ struct ProposalListView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     if store.activeSession == nil {
-                        createTestRoundCard()
+                        noActiveRoundCard()
                     } else {
                         roundInfoCard()
-                    }
-                    zkpBanner()
-                    progressHeader()
+                        zkpBanner()
+                        progressHeader()
 
-                    ForEach(store.votingRound.proposals) { proposal in
-                        proposalCard(proposal)
-                            .id(proposal.id)
+                        ForEach(store.votingRound.proposals) { proposal in
+                            proposalCard(proposal)
+                                .id(proposal.id)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -133,46 +133,23 @@ struct ProposalListView: View {
         }
     }
 
-    // MARK: - Create Test Round
+    // MARK: - No Active Round
 
     @ViewBuilder
-    private func createTestRoundCard() -> some View {
+    private func noActiveRoundCard() -> some View {
         VStack(spacing: 12) {
+            Image(systemName: "rectangle.slash")
+                .font(.system(size: 28))
+                .foregroundStyle(Design.Text.tertiary.color(colorScheme))
+
             Text("No Active Voting Round")
                 .zFont(.semiBold, size: 18, style: Design.Text.primary)
 
-            Text("Create a test session on the local chain to start voting.")
+            Text("There are no voting rounds in progress. Rounds are created by governance administrators — check back later.")
                 .zFont(.regular, size: 13, style: Design.Text.secondary)
                 .multilineTextAlignment(.center)
-
-            if let error = store.testRoundError {
-                Text(error)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 8)
-            }
-
-            Button {
-                store.send(.createTestRound)
-            } label: {
-                HStack(spacing: 8) {
-                    if store.isCreatingTestRound {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(store.isCreatingTestRound ? "Creating..." : "Create Test Round")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.accentColor)
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .disabled(store.isCreatingTestRound)
         }
-        .padding(16)
+        .padding(20)
         .background(Design.Surfaces.bgPrimary.color(colorScheme))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -193,20 +170,22 @@ struct ProposalListView: View {
 
     @ViewBuilder
     private func progressHeader() -> some View {
-        HStack {
-            Text("\(store.votedCount) of \(store.totalProposals) voted")
-                .zFont(.medium, size: 14, style: Design.Text.secondary)
+        if store.activeSession != nil {
+            HStack {
+                Text("\(store.votedCount) of \(store.totalProposals) voted")
+                    .zFont(.medium, size: 14, style: Design.Text.secondary)
 
-            Spacer()
+                Spacer()
 
-            if store.isDelegationReady {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.system(size: 12))
-                    Text("Ready to vote")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.green)
+                if store.isDelegationReady {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.system(size: 12))
+                        Text("Ready to vote")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.green)
+                    }
                 }
             }
         }
