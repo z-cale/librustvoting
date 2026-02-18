@@ -7,13 +7,14 @@ import { JsonView } from "./components/JsonView";
 import { RoundEditor } from "./components/RoundEditor";
 import { RoundsList } from "./components/RoundsList";
 import { useStore } from "./store/useStore";
-import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database, Eye, EyeOff, Wallet, Unplug, BarChart3 } from "lucide-react";
+import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database, Eye, EyeOff, Wallet, Unplug, BarChart3, Copy, Check } from "lucide-react";
 import type { Proposal, RoundSettings, RoundStatus, VotingRound } from "./types";
 import {
   LIGHTWALLETD_ENDPOINTS,
   getStoredRpc,
   setStoredRpc,
   useChainInfo,
+  estimateTimestamp,
 } from "./store/rpc";
 import * as chainApi from "./api/chain";
 import * as cosmosTx from "./api/cosmosTx";
@@ -1538,6 +1539,37 @@ function base64ToHex(b64: string): string {
   ).join("");
 }
 
+/* ── Copyable field helper ────────────────────────────────────── */
+
+function CopyableField({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] text-text-secondary shrink-0">{label}</span>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className={`text-[11px] text-text-primary truncate ${mono ? "font-mono" : ""}`}>
+          {value}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="p-0.5 rounded hover:bg-surface-3 text-text-muted hover:text-text-secondary cursor-pointer shrink-0 transition-colors"
+          title="Copy to clipboard"
+        >
+          {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Vote status view ────────────────────────────────────────── */
 
 function VoteStatusView() {
@@ -1546,6 +1578,7 @@ function VoteStatusView() {
   const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const zcashChain = useChainInfo();
 
   const fetchAll = async () => {
     setLoading(true);
@@ -1657,6 +1690,13 @@ function VoteStatusView() {
                 : null;
             const isExpired = endDate ? endDate.getTime() < Date.now() : false;
 
+            const roundIdHex = base64ToHex(roundId);
+            const snapshotHeight = Number(round.snapshot_height ?? 0);
+            const snapshotTime =
+              snapshotHeight > 0 && zcashChain.latestHeight && zcashChain.latestTimestamp
+                ? estimateTimestamp(snapshotHeight, zcashChain.latestHeight, zcashChain.latestTimestamp)
+                : null;
+
             return (
               <div
                 key={roundId}
@@ -1669,7 +1709,7 @@ function VoteStatusView() {
                       <h2 className="text-sm font-semibold text-text-primary truncate">
                         {summary?.description ||
                           round.description ||
-                          `Round ${roundId.slice(0, 12)}...`}
+                          `Round ${roundIdHex.slice(0, 16)}...`}
                       </h2>
                       <span
                         className={`text-[9px] px-2 py-0.5 rounded-full shrink-0 ${statusInfo.color}`}
@@ -1692,6 +1732,31 @@ function VoteStatusView() {
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success" />
                     </span>
+                  )}
+                </div>
+
+                {/* Round info */}
+                <div className="px-5 pb-3 space-y-1.5">
+                  <CopyableField
+                    label="Round ID"
+                    value={roundIdHex}
+                  />
+                  {snapshotHeight > 0 && (
+                    <CopyableField
+                      label="Snapshot height"
+                      value={
+                        snapshotTime
+                          ? `${snapshotHeight.toLocaleString()} (~${snapshotTime.toLocaleDateString()})`
+                          : snapshotHeight.toLocaleString()
+                      }
+                    />
+                  )}
+                  {endDate && (
+                    <CopyableField
+                      label="Vote end time"
+                      value={endDate.toLocaleString()}
+                      mono={false}
+                    />
                   )}
                 </div>
 
