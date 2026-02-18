@@ -26,6 +26,11 @@ function apiBase(): string {
   return url;
 }
 
+/** Return the resolved API base URL for use by other modules (e.g. cosmosTx). */
+export function getApiBase(): string {
+  return apiBase();
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const base = apiBase();
   const resp = await fetch(`${base}${path}`, init);
@@ -123,16 +128,8 @@ export async function getHelperStatus(): Promise<HelperStatus> {
   return fetchJson<HelperStatus>("/api/v1/status");
 }
 
-export async function setVoteManager(
-  creator: string,
-  newManager: string
-): Promise<BroadcastResult> {
-  return fetchJson<BroadcastResult>("/zally/v1/set-vote-manager", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ creator, new_manager: newManager }),
-  });
-}
+// setVoteManager was removed: MsgSetVoteManager is now a standard Cosmos SDK
+// transaction signed client-side. See cosmosTx.ts.
 
 export async function listRounds(): Promise<{ rounds: ChainRound[] | null }> {
   return fetchJson<{ rounds: ChainRound[] | null }>("/zally/v1/rounds");
@@ -152,24 +149,5 @@ export async function getTallyResults(
   );
 }
 
-export interface SubmitSessionPayload {
-  creator: string;
-  snapshot_height: number;
-  vote_end_time: number;
-  description: string;
-  proposals: Array<{
-    id: number;
-    title: string;
-    description: string;
-  }>;
-}
-
-export async function submitSession(
-  payload: SubmitSessionPayload
-): Promise<BroadcastResult> {
-  return fetchJson<BroadcastResult>("/zally/v1/submit-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
+// submitSession was removed: MsgCreateVotingSession is now a standard Cosmos
+// SDK transaction signed client-side. See cosmosTx.ts.

@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
           target: chainUrl,
           changeOrigin: true,
         },
+        '/cosmos': {
+          target: chainUrl,
+          changeOrigin: true,
+        },
         '/api': {
           target: chainUrl,
           changeOrigin: true,

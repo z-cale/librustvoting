@@ -7,7 +7,7 @@ import { JsonView } from "./components/JsonView";
 import { RoundEditor } from "./components/RoundEditor";
 import { RoundsList } from "./components/RoundsList";
 import { useStore } from "./store/useStore";
-import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database } from "lucide-react";
+import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database, Eye, EyeOff } from "lucide-react";
 import type { Proposal, RoundSettings, RoundStatus, VotingRound } from "./types";
 import {
   LIGHTWALLETD_ENDPOINTS,
@@ -16,6 +16,7 @@ import {
   useChainInfo,
 } from "./store/rpc";
 import * as chainApi from "./api/chain";
+import * as cosmosTx from "./api/cosmosTx";
 
 type Section = "about" | "rounds" | "builder" | "json" | "downloads" | "preview" | "settings" | "chain-rounds";
 
@@ -86,47 +87,15 @@ function App() {
 
   const handlePublishConfirm = useCallback(async () => {
     if (!publishModal) return;
-    const round = store.rounds.find((r) => r.id === publishModal);
-    if (!round) return;
+    const _round = store.rounds.find((r) => r.id === publishModal);
+    if (!_round) return;
 
-    setPublishStatus("publishing");
-    try {
-      const vm = await chainApi.getVoteManager();
-      if (!vm.address) {
-        setPublishError("No VoteManager address set on the chain. Set one in Settings first.");
-        setPublishStatus("error");
-        return;
-      }
-
-      const result = await chainApi.submitSession({
-        creator: vm.address,
-        snapshot_height: round.settings.snapshotHeight
-          ? parseInt(round.settings.snapshotHeight, 10)
-          : 0,
-        vote_end_time: round.settings.endTime
-          ? Math.floor(new Date(round.settings.endTime).getTime() / 1000)
-          : Math.floor(Date.now() / 1000) + 86400 * 7, // default: 7 days from now
-        description: round.settings.description || round.name,
-        proposals: round.proposals.map((p, i) => ({
-          id: i + 1,
-          title: p.title,
-          description: p.description,
-        })),
-      });
-
-      if (result.code !== 0) {
-        setPublishError(result.log || `Transaction failed with code ${result.code}`);
-        setPublishStatus("error");
-      } else {
-        setPublishResult(result.tx_hash);
-        setPublishStatus("ok");
-        store.setRoundStatus(publishModal, "published");
-        store.updateRound(publishModal, { chainTxHash: result.tx_hash });
-      }
-    } catch (err) {
-      setPublishError(err instanceof Error ? err.message : String(err));
-      setPublishStatus("error");
-    }
+    setPublishStatus("error");
+    setPublishError(
+      "MsgCreateVotingSession is now a standard Cosmos SDK transaction that " +
+      "requires client-side signing. This publish flow has not been migrated yet. " +
+      "Use `zallyd tx sign/broadcast` or the e2e test tooling for now."
+    );
   }, [publishModal, store]);
 
   const handleNavigate = useCallback(
@@ -576,10 +545,13 @@ function SettingsPage() {
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
   const [helperStatus, setHelperStatus] = useState<chainApi.HelperStatus | null>(null);
   const [voteManager, setVoteManager] = useState<string>("");
-  const [vmCreator, setVmCreator] = useState("");
+  const [vmPrivKey, setVmPrivKey] = useState("");
+  const [vmPrivKeyVisible, setVmPrivKeyVisible] = useState(false);
+  const [vmDerivedAddr, setVmDerivedAddr] = useState("");
   const [vmNewAddr, setVmNewAddr] = useState("");
   const [vmStatus, setVmStatus] = useState<"idle" | "sending" | "ok" | "error">("idle");
   const [vmError, setVmError] = useState("");
+  const [vmTxHash, setVmTxHash] = useState("");
 
   const handleRpcChange = (url: string) => {
     setRpcUrl(url);
@@ -611,19 +583,39 @@ function SettingsPage() {
     }
   };
 
+  // Derive bech32 address whenever the private key changes.
+  // Only run the async derivation when the key is the right length; the JSX
+  // guards display on vmPrivKey.length === 64 so stale state is never shown.
+  useEffect(() => {
+    if (!vmPrivKey || vmPrivKey.length !== 64) return;
+    let cancelled = false;
+    cosmosTx
+      .deriveAddress(vmPrivKey)
+      .then((addr) => {
+        if (!cancelled) setVmDerivedAddr(addr);
+      })
+      .catch(() => {
+        if (!cancelled) setVmDerivedAddr("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vmPrivKey]);
+
   const handleSetVoteManager = async () => {
     setVmStatus("sending");
     setVmError("");
+    setVmTxHash("");
     try {
-      const result = await chainApi.setVoteManager(vmCreator, vmNewAddr);
+      const base = chainApi.getApiBase();
+      const result = await cosmosTx.setVoteManager(base, vmPrivKey, vmNewAddr);
       if (result.code !== 0) {
         setVmError(result.log || `tx failed with code ${result.code}`);
         setVmStatus("error");
       } else {
+        setVmTxHash(result.tx_hash);
         setVmStatus("ok");
         setVoteManager(vmNewAddr);
-        setVmCreator("");
-        setVmNewAddr("");
       }
     } catch (err) {
       setVmError(err instanceof Error ? err.message : String(err));
@@ -859,33 +851,91 @@ function SettingsPage() {
                 <summary className="text-[11px] text-accent cursor-pointer hover:text-accent-glow">
                   Set VoteManager address
                 </summary>
-                <div className="mt-2 space-y-2">
-                  <input
-                    type="text"
-                    value={vmCreator}
-                    onChange={(e) => setVmCreator(e.target.value)}
-                    placeholder="Creator address (validator operator)"
-                    className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
-                  />
-                  <input
-                    type="text"
-                    value={vmNewAddr}
-                    onChange={(e) => setVmNewAddr(e.target.value)}
-                    placeholder="New VoteManager address"
-                    className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
-                  />
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="block text-[11px] text-text-secondary mb-1">
+                      Signer private key (hex)
+                    </label>
+                    <p className="text-[10px] text-text-muted mb-1.5">
+                      secp256k1 key of current vote manager or a bonded validator.
+                      The tx will be signed locally in your browser.
+                    </p>
+                    <div className="relative">
+                      <input
+                        type={vmPrivKeyVisible ? "text" : "password"}
+                        value={vmPrivKey}
+                        onChange={(e) => setVmPrivKey(e.target.value.trim())}
+                        placeholder="64-character hex private key"
+                        spellCheck={false}
+                        autoComplete="off"
+                        className="w-full px-3 py-2 pr-9 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setVmPrivKeyVisible((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-text-muted hover:text-text-secondary cursor-pointer"
+                        title={vmPrivKeyVisible ? "Hide" : "Show"}
+                      >
+                        {vmPrivKeyVisible ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                    {vmPrivKey.length === 64 && vmDerivedAddr && (
+                      <p className="text-[10px] text-text-muted mt-1 font-mono">
+                        Signer: {vmDerivedAddr}
+                      </p>
+                    )}
+                    {vmPrivKey.length > 0 && vmPrivKey.length !== 64 && (
+                      <p className="text-[10px] text-warning mt-1">
+                        Key must be exactly 64 hex characters ({vmPrivKey.length}/64)
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-text-secondary mb-1">
+                      New VoteManager address
+                    </label>
+                    <input
+                      type="text"
+                      value={vmNewAddr}
+                      onChange={(e) => setVmNewAddr(e.target.value)}
+                      placeholder="zvote1..."
+                      className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+                    />
+                  </div>
                   <button
                     onClick={handleSetVoteManager}
-                    disabled={!vmCreator || !vmNewAddr || vmStatus === "sending"}
+                    disabled={
+                      !vmPrivKey ||
+                      vmPrivKey.length !== 64 ||
+                      !vmNewAddr ||
+                      vmStatus === "sending"
+                    }
                     className="px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
                   >
-                    {vmStatus === "sending" ? "Sending..." : "Set VoteManager"}
+                    {vmStatus === "sending" ? (
+                      <span className="flex items-center gap-1.5">
+                        <Loader2 size={12} className="animate-spin" /> Signing & broadcasting...
+                      </span>
+                    ) : (
+                      "Sign & broadcast SetVoteManager"
+                    )}
                   </button>
                   {vmStatus === "ok" && (
-                    <p className="text-[11px] text-success">VoteManager updated.</p>
+                    <div className="bg-success/10 border border-success/30 rounded-lg p-2.5">
+                      <p className="text-[11px] text-success font-semibold">
+                        VoteManager updated
+                      </p>
+                      {vmTxHash && (
+                        <p className="text-[10px] text-text-secondary font-mono mt-0.5 break-all">
+                          TX: {vmTxHash}
+                        </p>
+                      )}
+                    </div>
                   )}
                   {vmStatus === "error" && (
-                    <p className="text-[11px] text-danger">{vmError}</p>
+                    <div className="bg-danger/10 border border-danger/30 rounded-lg p-2.5">
+                      <p className="text-[11px] text-danger">{vmError}</p>
+                    </div>
                   )}
                 </div>
               </details>
