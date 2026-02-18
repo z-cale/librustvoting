@@ -1,5 +1,4 @@
 // Chain API client for the Zally voting chain REST endpoints.
-// Uses relative paths by default; proxied via Vite (dev) or Vercel rewrites (prod).
 
 const CHAIN_URL_KEY = "zally-chain-url";
 const DEFAULT_CHAIN_URL = import.meta.env.VITE_CHAIN_URL || "http://localhost:1318";
@@ -12,13 +11,16 @@ export function setChainUrl(url: string) {
   localStorage.setItem(CHAIN_URL_KEY, url);
 }
 
-// Use relative URLs when the chain URL is the default. Both the Vite dev
-// server (proxy config) and Vercel (rewrites in vercel.json) forward
-// /zally/* to the actual chain endpoint, avoiding mixed-content issues.
-// When the user overrides the URL via localStorage, use it directly.
+// In dev mode the Vite proxy forwards /zally/* to the chain (relative paths).
+// In production the user sets the chain URL (e.g. https://…sslip.io) via the UI
+// which is stored in localStorage and used directly.
 function apiBase(): string {
   const url = getChainUrl();
-  if (url === DEFAULT_CHAIN_URL) {
+  if (
+    url === DEFAULT_CHAIN_URL &&
+    typeof window !== "undefined" &&
+    window.location.port === "5173"
+  ) {
     return "";
   }
   return url;
