@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'nullifier-ingest/**'
+      - 'sdk/deploy/Caddyfile'
   workflow_dispatch: # allow manual run
 
 permissions:
@@ -46,13 +47,15 @@ jobs:
         run: make build
         working-directory: nullifier-ingest
 
-      - name: Upload binaries
+      - name: Upload binaries and config
         uses: actions/upload-artifact@v4
         with:
           name: nullifier-ingest-binaries
           path: |
             nullifier-ingest/service/target/release/query-server
             nullifier-ingest/service/target/release/ingest-nfs
+            nullifier-ingest/docs/nullifier-query-server.service
+            sdk/deploy/Caddyfile
 
   deploy:
     name: Deploy to remote
@@ -70,10 +73,10 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          source: "query-server,ingest-nfs"
+          source: "query-server,ingest-nfs,nullifier-query-server.service,Caddyfile"
           target: ${{ env.DEPLOY_PATH }}
 
-      - name: Restart service
+      - name: Install config and restart services
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -81,4 +84,9 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
             sudo chmod +x /opt/nullifier-ingest/query-server /opt/nullifier-ingest/ingest-nfs
-            sudo systemctl restart nullifier-query-server || true
+            sudo cp /opt/nullifier-ingest/nullifier-query-server.service /etc/systemd/system/nullifier-query-server.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable nullifier-query-server
+            sudo systemctl restart nullifier-query-server
+            sudo cp /opt/nullifier-ingest/Caddyfile /etc/caddy/Caddyfile
+            sudo systemctl reload caddy || true
