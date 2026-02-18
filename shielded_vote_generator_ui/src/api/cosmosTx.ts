@@ -330,11 +330,47 @@ function filledBytes(byte: number, len: number): Uint8Array {
 
 const STUB_SNAPSHOT_BLOCKHASH = filledBytes(0xaa, 32);
 const STUB_PROPOSALS_HASH     = filledBytes(0xbb, 32);
-const STUB_NULLIFIER_IMT_ROOT = filledBytes(0xcc, 32);
-const STUB_NC_ROOT            = filledBytes(0xdd, 32);
 const STUB_VK_ZKP1            = filledBytes(0xf1, 64);
 const STUB_VK_ZKP2            = filledBytes(0xf2, 64);
 const STUB_VK_ZKP3            = filledBytes(0xf3, 64);
+
+// ── Nullifier service helpers ───────────────────────────────────
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+async function fetchNullifierImtRoot(nullifierApiBase: string): Promise<Uint8Array> {
+  const resp = await fetch(`${nullifierApiBase}/root`);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch IMT root: HTTP ${resp.status}`);
+  }
+  const data: { root: string } = await resp.json();
+  const bytes = hexToBytes(data.root);
+  if (bytes.length !== 32) {
+    throw new Error(`IMT root is ${bytes.length} bytes, expected 32`);
+  }
+  return bytes;
+}
+
+async function fetchNcRoot(nullifierApiBase: string, height: number): Promise<Uint8Array> {
+  const resp = await fetch(`${nullifierApiBase}/nc-root/${height}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Failed to fetch nc_root: HTTP ${resp.status} – ${text}`);
+  }
+  const data: { nc_root: string; height: number } = await resp.json();
+  const bytes = hexToBytes(data.nc_root);
+  if (bytes.length !== 32) {
+    throw new Error(`nc_root is ${bytes.length} bytes, expected 32`);
+  }
+  return bytes;
+}
 
 // ── Public API ──────────────────────────────────────────────────
 
@@ -365,8 +401,8 @@ export async function setVoteManager(
 /**
  * Sign and broadcast a MsgCreateVotingSession transaction.
  *
- * Byte fields (snapshot_blockhash, proposals_hash, nullifier_imt_root,
- * nc_root, vk_zkp1/2/3) use stub values matching the e2e test defaults.
+ * Fetches the real nullifier_imt_root and nc_root from the nullifier service.
+ * Byte fields (snapshot_blockhash, proposals_hash, vk_zkp1/2/3) still use stubs.
  */
 export async function createVotingSession(
   apiBase: string,
@@ -375,6 +411,7 @@ export async function createVotingSession(
     snapshotHeight: number;
     voteEndTime: number;
     description: string;
+    nullifierApiBase: string;
     proposals: Array<{
       id: number;
       title: string;
@@ -384,6 +421,12 @@ export async function createVotingSession(
   },
 ): Promise<BroadcastResult> {
   const [account] = await signer.getAccounts();
+
+  const [nullifierImtRoot, ncRoot] = await Promise.all([
+    fetchNullifierImtRoot(params.nullifierApiBase),
+    fetchNcRoot(params.nullifierApiBase, params.snapshotHeight),
+  ]);
+
   return signAndBroadcast({
     apiBase,
     signer,
@@ -396,8 +439,8 @@ export async function createVotingSession(
           snapshotBlockhash: STUB_SNAPSHOT_BLOCKHASH,
           proposalsHash: STUB_PROPOSALS_HASH,
           voteEndTime: params.voteEndTime,
-          nullifierImtRoot: STUB_NULLIFIER_IMT_ROOT,
-          ncRoot: STUB_NC_ROOT,
+          nullifierImtRoot,
+          ncRoot,
           vkZkp1: STUB_VK_ZKP1,
           vkZkp2: STUB_VK_ZKP2,
           vkZkp3: STUB_VK_ZKP3,

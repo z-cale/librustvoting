@@ -129,6 +129,7 @@ function App() {
         snapshotHeight,
         voteEndTime,
         proposals,
+        nullifierApiBase: nullifierApiBase(),
         description: round.settings.description || round.name,
       });
       if (result.code !== 0) {
