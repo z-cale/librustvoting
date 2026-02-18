@@ -1013,6 +1013,7 @@ public struct Voting {
 
                 let proposalId = pending.proposalId
                 let choice = pending.choice
+                let numOptions = UInt32(state.votingRound.proposals.first { $0.id == proposalId }?.options.count ?? 3)
                 let roundId = state.roundId
                 let network = zcashSDKEnvironment.network
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
@@ -1035,7 +1036,7 @@ public struct Voting {
                     // and returns encrypted shares in the bundle.
                     var builtBundle: VoteCommitmentBundle?
                     for try await event in votingCrypto.buildVoteCommitment(
-                        roundId, hotkeySeed, networkId, proposalId, choice,
+                        roundId, hotkeySeed, networkId, proposalId, choice, numOptions,
                         vanWitness.authPath, vanWitness.position, vanWitness.anchorHeight
                     ) {
                         if case .completed(let bundle) = event {
@@ -1068,7 +1069,7 @@ public struct Voting {
                     try await votingCrypto.storeVanPosition(roundId, newVanPosition)
 
                     let payloads = try await votingCrypto.buildSharePayloads(
-                        builtBundle.encShares, builtBundle, choice, vcTreePosition
+                        builtBundle.encShares, builtBundle, choice, numOptions, vcTreePosition
                     )
                     try await votingAPI.delegateShares(payloads, roundId)
 

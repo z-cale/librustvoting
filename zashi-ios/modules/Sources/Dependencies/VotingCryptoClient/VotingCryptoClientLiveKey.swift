@@ -367,7 +367,7 @@ extension VotingCryptoClient: DependencyKey {
                     )
                 }
             },
-            buildVoteCommitment: { roundId, hotkeySeed, networkId, proposalId, choice, vanAuthPath, vanPosition, anchorHeight in
+            buildVoteCommitment: { roundId, hotkeySeed, networkId, proposalId, choice, numOptions, vanAuthPath, vanPosition, anchorHeight in
                 AsyncThrowingStream { continuation in
                     Task.detached {
                         do {
@@ -379,6 +379,7 @@ extension VotingCryptoClient: DependencyKey {
                                 networkId: networkId,
                                 proposalId: proposalId,
                                 choice: choice.ffiValue,
+                                numOptions: numOptions,
                                 vanAuthPath: vanAuthPath,
                                 vanPosition: vanPosition,
                                 anchorHeight: anchorHeight,
@@ -413,7 +414,7 @@ extension VotingCryptoClient: DependencyKey {
                     }
                 }
             },
-            buildSharePayloads: { encShares, commitment, voteDecision, vcTreePosition in
+            buildSharePayloads: { encShares, commitment, voteDecision, numOptions, vcTreePosition in
                 let db = try await dbActor.database()
                 let ffiShares = encShares.map {
                     ZcashVotingFFI.EncryptedShare(
@@ -441,6 +442,7 @@ extension VotingCryptoClient: DependencyKey {
                     encShares: ffiShares,
                     commitment: ffiCommitment,
                     voteDecision: voteDecision.ffiValue,
+                    numOptions: numOptions,
                     vcTreePosition: vcTreePosition
                 )
                 return ffiPayloads.map {
