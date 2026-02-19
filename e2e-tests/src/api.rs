@@ -686,19 +686,39 @@ fn parse_broadcast_stdout(
 /// Returns the bech32 account address for a key in the test keyring.
 ///
 /// Runs `zallyd keys show <name> -a --keyring-backend test --home <home>`.
+/// When `ZALLY_SSH_HOST` is set, the command is executed on the remote host
+/// via SSH (the keyring lives there, not on the CI runner).
 pub fn key_account_address(key_name: &str, home_dir: &str) -> Option<String> {
     use std::process::Command;
 
-    let output = Command::new("zallyd")
-        .args([
-            "keys", "show",
-            key_name,
-            "-a",
-            "--keyring-backend", "test",
-            "--home", home_dir,
-        ])
-        .output()
-        .ok()?;
+    let ssh_host = std::env::var("ZALLY_SSH_HOST").ok();
+    let output = if let Some(ref host) = ssh_host {
+        let remote_zallyd = std::env::var("ZALLY_REMOTE_ZALLYD")
+            .unwrap_or_else(|_| "zallyd".to_string());
+        Command::new("ssh")
+            .args([
+                host.as_str(),
+                &format!(
+                    "{zallyd} keys show {key} -a --keyring-backend test --home {home}",
+                    zallyd = remote_zallyd,
+                    key = key_name,
+                    home = home_dir,
+                ),
+            ])
+            .output()
+            .ok()?
+    } else {
+        Command::new("zallyd")
+            .args([
+                "keys", "show",
+                key_name,
+                "-a",
+                "--keyring-backend", "test",
+                "--home", home_dir,
+            ])
+            .output()
+            .ok()?
+    };
 
     if !output.status.success() {
         return None;
