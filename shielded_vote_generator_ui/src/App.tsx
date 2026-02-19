@@ -199,6 +199,7 @@ function App() {
             onSelectRound={handleSelectRound}
             onDuplicate={(id) => store.duplicateRound(id)}
             onArchive={(id) => store.setRoundStatus(id, "archived")}
+            onDelete={(id) => store.deleteRound(id)}
           />
         )}
 
