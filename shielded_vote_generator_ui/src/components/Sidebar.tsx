@@ -5,8 +5,6 @@ import {
   Clock,
   FileText,
   Archive,
-  Code2,
-  Download,
   Shield,
   Info,
   Settings,
@@ -54,11 +52,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Archived", icon: <Archive size={15} />, filter: "archived" },
 ];
 
-const RESULTS_ITEMS: NavItem[] = [
-  { label: "Vote status", icon: <BarChart3 size={15} />, section: "vote-status" },
-  { label: "Raw JSON", icon: <Code2 size={15} />, section: "json" },
-  { label: "Downloads", icon: <Download size={15} />, section: "downloads" },
-];
 
 interface SidebarProps {
   rounds: VotingRound[];
@@ -138,6 +131,18 @@ export function Sidebar({
           About
         </button>
 
+        <button
+          onClick={() => onNavigate("vote-status")}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer ${
+            currentSection === "vote-status"
+              ? "bg-surface-3 text-text-primary"
+              : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+          }`}
+        >
+          <BarChart3 size={15} />
+          Vote status
+        </button>
+
         <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-3 mb-1">
           Voting rounds
         </p>
@@ -159,23 +164,6 @@ export function Sidebar({
           </button>
         ))}
 
-        <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-4 mb-1">
-          Results & exports
-        </p>
-        {RESULTS_ITEMS.map((item) => (
-          <button
-            key={item.label}
-            onClick={() => onNavigate(item.section!)}
-            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer ${
-              currentSection === item.section
-                ? "bg-surface-3 text-text-primary"
-                : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-            }`}
-          >
-            {item.icon}
-            {item.label}
-          </button>
-        ))}
 
         {/* Recent rounds */}
         <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-4 mb-1">

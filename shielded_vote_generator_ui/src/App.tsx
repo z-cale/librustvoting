@@ -1612,10 +1612,15 @@ function VoteStatusView() {
                             <span className="text-[10px] font-bold text-text-muted bg-surface-3 rounded px-1.5 py-0.5">
                               {String(prop.id ?? 0).padStart(2, "0")}
                             </span>
-                            <span className="text-xs font-semibold text-text-primary">
+                            <span className="text-xs font-semibold text-text-primary flex-1">
                               {prop.title || "Untitled"}
                             </span>
                           </div>
+                          {prop.description && (
+                            <p className="text-[11px] text-text-secondary mb-2 leading-relaxed">
+                              {prop.description}
+                            </p>
+                          )}
 
                           {/* Winner banner — only when finalized */}
                           {isFinalized && winnerIndices.size > 0 && (
@@ -1732,10 +1737,15 @@ function VoteStatusView() {
                           <span className="text-[10px] font-bold text-text-muted bg-surface-3 rounded px-1.5 py-0.5">
                             {String(p.id).padStart(2, "0")}
                           </span>
-                          <span className="text-xs text-text-primary">
+                          <span className="text-xs text-text-primary flex-1">
                             {p.title || "Untitled"}
                           </span>
                         </div>
+                        {p.description && (
+                          <p className="text-[11px] text-text-secondary mt-2 leading-relaxed">
+                            {p.description}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -64,19 +64,45 @@ struct ResultsView: View {
 
     // MARK: - Round Header
 
+    private var statusLabel: String {
+        switch store.activeSession?.status {
+        case .active: return "Active"
+        case .tallying: return "Tallying"
+        case .finalized: return "Finalized"
+        default: return "Unknown"
+        }
+    }
+
+    private var statusColor: Color {
+        switch store.activeSession?.status {
+        case .active: return .green
+        case .tallying: return .orange
+        case .finalized: return .green
+        default: return .secondary
+        }
+    }
+
     @ViewBuilder
     private func roundHeaderCard() -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(store.votingRound.title)
+            // Title: "Round 1"
+            Text("Round 1")
                 .zFont(.semiBold, size: 18, style: Design.Text.primary)
 
+            // Round description
+            if !store.votingRound.description.isEmpty {
+                Text(store.votingRound.description)
+                    .zFont(.regular, size: 13, style: Design.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Status pill
-            Text("Finalized")
+            Text(statusLabel)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(statusColor)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(Color.accentColor.opacity(0.12))
+                .background(statusColor.opacity(0.12))
                 .clipShape(Capsule())
 
             // Detail pills
@@ -92,8 +118,8 @@ struct ResultsView: View {
                 )
                 Spacer()
                 detailPill(
-                    label: "Proposals",
-                    value: "\(store.votingRound.proposals.count)"
+                    label: "Status",
+                    value: statusLabel
                 )
             }
         }
@@ -147,6 +173,13 @@ struct ResultsView: View {
                 Text(proposal.title)
                     .zFont(.semiBold, size: 15, style: Design.Text.primary)
                     .lineLimit(2)
+            }
+
+            // Proposal description
+            if !proposal.description.isEmpty {
+                Text(proposal.description)
+                    .zFont(.regular, size: 12, style: Design.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Winner highlight
