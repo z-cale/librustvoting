@@ -8,6 +8,7 @@ User=root
 WorkingDirectory=/opt/nullifier-ingest
 Environment="DATA_DIR=/opt/nullifier-ingest"
 Environment="PORT=3000"
+Environment="LWD_URL=https://zec.rocks:443"
 ExecStart=/opt/nullifier-ingest/query-server
 Restart=on-failure
 
