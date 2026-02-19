@@ -12,6 +12,7 @@ import {
   Settings,
   Server,
   BarChart3,
+  Trash2,
 } from "lucide-react";
 import type { VotingRound, RoundStatus } from "../types";
 
@@ -70,6 +71,7 @@ interface SidebarProps {
   onCreateRound: () => void;
   onImportJson: () => void;
   onNavigate: (section: string) => void;
+  onDeleteRound: (id: string) => void;
   currentSection: string;
 }
 
@@ -82,6 +84,7 @@ export function Sidebar({
   onCreateRound,
   onImportJson,
   onNavigate,
+  onDeleteRound,
   currentSection,
 }: SidebarProps) {
   const recentRounds = rounds.slice(0, 5);
@@ -187,38 +190,54 @@ export function Sidebar({
         ) : (
           <div className="flex flex-col gap-0.5">
             {recentRounds.map((round) => (
-              <button
+              <div
                 key={round.id}
-                onClick={() => {
-                  onSelectRound(round.id);
-                  onNavigate("builder");
-                }}
-                className={`w-full text-left px-2.5 py-2 rounded-md transition-colors cursor-pointer ${
+                className={`group relative flex items-stretch rounded-md transition-colors ${
                   activeRoundId === round.id && currentSection === "builder"
                     ? "bg-surface-3"
                     : "hover:bg-surface-2"
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-text-primary truncate max-w-[140px]">
-                    {round.name}
-                  </span>
-                  <span
-                    className={`text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_COLORS[round.status]}`}
+                <button
+                  onClick={() => {
+                    onSelectRound(round.id);
+                    onNavigate("builder");
+                  }}
+                  className="flex-1 text-left px-2.5 py-2 cursor-pointer min-w-0"
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-xs text-text-primary truncate">
+                      {round.name}
+                    </span>
+                    <span
+                      className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_COLORS[round.status]}`}
+                    >
+                      {STATUS_LABELS[round.status]}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] text-text-muted">
+                      Edited {timeAgo(round.updatedAt)}
+                    </span>
+                    <span className="text-[10px] text-text-muted">
+                      {round.proposals.length} proposal
+                      {round.proposals.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                </button>
+                {round.status !== "published" && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteRound(round.id);
+                    }}
+                    title="Delete round"
+                    className="opacity-0 group-hover:opacity-100 shrink-0 flex items-center justify-center px-2 text-text-muted hover:text-danger transition-opacity cursor-pointer"
                   >
-                    {STATUS_LABELS[round.status]}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[10px] text-text-muted">
-                    Edited {timeAgo(round.updatedAt)}
-                  </span>
-                  <span className="text-[10px] text-text-muted">
-                    {round.proposals.length} proposal
-                    {round.proposals.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-              </button>
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}
