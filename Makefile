@@ -6,7 +6,7 @@ INGEST_DIR  = nullifier-ingest
 	test test-unit test-integration test-api test-api-restart test-api-reinit test-e2e \
 	fixtures-ts circuits circuits-test fixtures \
 	test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi \
-	ingest ingest-status ingest-test ingest-proof ingest-clean ingest-serve \
+	ingest ingest-bootstrap ingest-status ingest-test ingest-proof ingest-clean ingest-serve \
 	ingest-test-integration \
 	up
 
@@ -84,6 +84,9 @@ test-all-ffi:
 
 # ── Nullifier Ingestion ──────────────────────────────────────────────
 
+ingest-bootstrap: ## Download nullifier bootstrap files if not already present
+	$(MAKE) -C $(INGEST_DIR) bootstrap
+
 ingest: ## Ingest Orchard nullifiers from chain into flat binary files (incremental)
 	$(MAKE) -C $(INGEST_DIR) ingest
 
@@ -107,7 +110,8 @@ ingest-test-integration: ## Run IMT ↔ delegation-circuit ZK integration test
 
 # ── Full Stack ───────────────────────────────────────────────────────
 
-up: ## Init SDK, ingest nullifiers, then run ingest-serve and start in parallel
+up: ## Init SDK, bootstrap+ingest nullifiers, then run ingest-serve and start in parallel
 	$(MAKE) init
+	$(MAKE) ingest-bootstrap
 	$(MAKE) ingest
 	$(MAKE) ingest-serve & $(MAKE) start

@@ -22,13 +22,14 @@ IMT_DIR     := imt-tree
 SERVICE_DIR := service
 
 # ── Configuration (override with env vars) ───────────────────────────
-DATA_DIR   ?= .
-LWD_URL    ?= https://zec.rocks:443
-PORT       ?= 3000
+DATA_DIR      ?= .
+LWD_URL       ?= https://zec.rocks:443
+PORT          ?= 3000
+BOOTSTRAP_URL ?= https://vote.fra1.digitaloceanspaces.com
 
 # ── Targets ──────────────────────────────────────────────────────────
 
-.PHONY: ingest ingest-resync test-proof build test test-integration clean status serve serve-deploy help
+.PHONY: ingest ingest-resync bootstrap test-proof build test test-integration clean status serve serve-deploy help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -36,6 +37,18 @@ help: ## Show this help
 
 build: ## Build all binaries (release)
 	cd $(SERVICE_DIR) && cargo build --release
+
+bootstrap: ## Download nullifier files from bootstrap URL if not present in DATA_DIR
+	@if [ ! -f "$(DATA_DIR)/nullifiers.checkpoint" ]; then \
+		echo "Bootstrap: nullifier files not found in $(DATA_DIR), downloading from $(BOOTSTRAP_URL)..."; \
+		mkdir -p "$(DATA_DIR)"; \
+		wget -q --show-progress -O "$(DATA_DIR)/nullifiers.bin"        "$(BOOTSTRAP_URL)/nullifiers.bin"; \
+		wget -q --show-progress -O "$(DATA_DIR)/nullifiers.checkpoint" "$(BOOTSTRAP_URL)/nullifiers.checkpoint"; \
+		wget -q --show-progress -O "$(DATA_DIR)/nullifiers.tree"       "$(BOOTSTRAP_URL)/nullifiers.tree"; \
+		echo "Bootstrap complete."; \
+	else \
+		echo "Bootstrap: nullifier files already present in $(DATA_DIR), skipping."; \
+	fi
 
 ingest: ## Ingest nullifiers incrementally (tree sidecar kept as-is)
 	cd $(SERVICE_DIR) && DATA_DIR=$(DATA_DIR) LWD_URL=$(LWD_URL) cargo run --release --bin ingest-nfs

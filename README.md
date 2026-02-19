@@ -14,10 +14,17 @@ Zally is a shielded voting protocol built on a Cosmos SDK chain. Votes are zero-
 
 ## Prerequisites
 
-- **Go 1.24+** — [https://go.dev/dl/](https://go.dev/dl/) (required by `sdk/go.mod`; `mise.toml` pins `1.23` — run `mise install` if using [mise](https://mise.jdx.dev/))
-- **Rust 1.83+ / Cargo** (stable) — [https://rustup.rs/](https://rustup.rs/) — install via:
+- **Go 1.24.1+** — [https://go.dev/dl/](https://go.dev/dl/) (Go 1.24.0 has a known incompatibility with `github.com/bytedance/sonic/loader` — use 1.24.1 or later); ensure `$GOPATH/bin` is on your `PATH`:
+  ```sh
+  export PATH=$PATH:$HOME/go/bin
+  ```
+- **Rust 1.93.1 / Cargo 1.93.1** (stable) — [https://rustup.rs/](https://rustup.rs/) — install via:
   ```sh
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **make** and **C toolchain** (`gcc`, `cc`) — install via:
+  ```sh
+  apt install build-essential
   ```
 
 ## Setup
