@@ -593,11 +593,10 @@ public struct Voting {
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 return .run { [sdkSynchronizer, votingCrypto] send in
-                    // Check if this round already exists and is past delegation
+                    // Check if this round already exists and delegation is fully complete
+                    // (proof generated AND VAN position stored on chain)
                     let existingState = try? await votingCrypto.getRoundState(roundId)
-                    let alreadyAuthorized = existingState.map {
-                        $0.phase == .delegationProved || $0.phase == .voteReady
-                    } ?? false
+                    let alreadyAuthorized = existingState?.proofGenerated ?? false
 
                     if alreadyAuthorized {
                         await send(.roundResumeChecked(alreadyAuthorized: true))
@@ -1014,6 +1013,7 @@ public struct Voting {
 
                 let proposalId = pending.proposalId
                 let choice = pending.choice
+                let numOptions = UInt32(state.votingRound.proposals.first { $0.id == proposalId }?.options.count ?? 3)
                 let roundId = state.roundId
                 let network = zcashSDKEnvironment.network
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
@@ -1036,7 +1036,7 @@ public struct Voting {
                     // and returns encrypted shares in the bundle.
                     var builtBundle: VoteCommitmentBundle?
                     for try await event in votingCrypto.buildVoteCommitment(
-                        roundId, hotkeySeed, networkId, proposalId, choice,
+                        roundId, hotkeySeed, networkId, proposalId, choice, numOptions,
                         vanWitness.authPath, vanWitness.position, vanWitness.anchorHeight
                     ) {
                         if case .completed(let bundle) = event {
@@ -1069,7 +1069,7 @@ public struct Voting {
                     try await votingCrypto.storeVanPosition(roundId, newVanPosition)
 
                     let payloads = try await votingCrypto.buildSharePayloads(
-                        builtBundle.encShares, builtBundle, choice, vcTreePosition
+                        builtBundle.encShares, builtBundle, choice, numOptions, vcTreePosition
                     )
                     try await votingAPI.delegateShares(payloads, roundId)
 

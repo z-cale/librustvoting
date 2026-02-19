@@ -92,15 +92,17 @@ public struct VotingCryptoClient {
         _ networkId: UInt32,
         _ proposalId: UInt32,
         _ choice: VoteChoice,
+        _ numOptions: UInt32,
         _ vanAuthPath: [Data],
         _ vanPosition: UInt32,
         _ anchorHeight: UInt32
     ) -> AsyncThrowingStream<VoteCommitmentBuildEvent, Error>
-        = { _, _, _, _, _, _, _, _ in AsyncThrowingStream { $0.finish() } }
+        = { _, _, _, _, _, _, _, _, _ in AsyncThrowingStream { $0.finish() } }
     public var buildSharePayloads: @Sendable (
         _ encShares: [EncryptedShare],
         _ commitment: VoteCommitmentBundle,
         _ voteDecision: VoteChoice,
+        _ numOptions: UInt32,
         _ vcTreePosition: UInt64
     ) async throws -> [SharePayload]
     /// Reconstruct the full chain-ready delegation TX payload from DB + seed.
