@@ -1,10 +1,3 @@
----
-name: Join Chain as New Validator
-overview: Step-by-step instructions to sync a new node to the running zvote-1 chain and register it as a validator using CreateValidatorWithPallasKey. The genesis node is already running on this host (node ID `7f186559fb472f9c414ca34ee3e7dfa8d530f6f6`, IP `164.92.137.124`, P2P port `26656`).
-todos: []
-isProject: false
----
-
 # Sync a New Node and Create a Validator
 
 ## Current Chain State
@@ -12,8 +5,6 @@ isProject: false
 The genesis validator is already running:
 
 - Chain ID: `zvote-1`
-- Node ID: `7f186559fb472f9c414ca34ee3e7dfa8d530f6f6`
-- External IP: `164.92.137.124`
 - P2P: `0.0.0.0:26656` (externally accessible)
 - RPC: `127.0.0.1:26657` (local only — see note in Step 6)
 - REST API: port `1318`
@@ -151,14 +142,7 @@ Use the `create-val-tx` helper tool (located in `sdk/scripts/create-val-tx`). Fr
 ```bash
 cd /root/zally/sdk    # or wherever the repo is on the new node
 
-# Save the new validator's account address for the helper tool
-echo "$NEW_VAL_ADDR" > $NEW_HOME/validator_address.txt
-
-go run ./scripts/create-val-tx \
-  --home $NEW_HOME \
-  --moniker $MONIKER \
-  --amount 10000000stake \
-  --rpc-url tcp://localhost:26257    # new node's RPC port (once synced)
+go run ./scripts/create-val-tx --moniker $MONIKER --amount 10000000stake --rpc-url tcp://localhost:26657
 ```
 
 This will:
@@ -166,35 +150,6 @@ This will:
 1. Read `priv_validator_key.json` from the new home for the consensus pubkey
 2. Read `pallas.pk` from the new home
 3. Build, sign, and broadcast `MsgCreateValidatorWithPallasKey` to the chain
-
-### Alternative: Manual CLI approach
-
-If you prefer the raw CLI instead of the helper tool, first generate the staking message:
-
-```bash
-zallyd tx staking create-validator \
-  --from validator \
-  --amount 10000000stake \
-  --commission-rate 0.1 \
-  --commission-max-rate 0.2 \
-  --commission-max-change-rate 0.01 \
-  --min-self-delegation 1 \
-  --moniker $MONIKER \
-  --chain-id zvote-1 \
-  --keyring-backend test \
-  --home $NEW_HOME \
-  --generate-only > /tmp/staking-msg.json
-
-# Then broadcast via the vote module:
-PALLAS_PK_HEX=$(xxd -p -c 32 $NEW_HOME/pallas.pk)
-zallyd tx vote create-validator-with-pallas-key $PALLAS_PK_HEX /tmp/staking-msg.json \
-  --from validator \
-  --keyring-backend test \
-  --chain-id zvote-1 \
-  --home $NEW_HOME \
-  --node tcp://localhost:26257 \
-  --yes
-```
 
 ## Step 9 — Verify
 
@@ -204,4 +159,3 @@ zallyd query staking validators \
   --node tcp://localhost:26257 \
   --output json | python3 -c "import sys,json; [print(v['description']['moniker'], v['status']) for v in json.load(sys.stdin)['validators']]"
 ```
-
