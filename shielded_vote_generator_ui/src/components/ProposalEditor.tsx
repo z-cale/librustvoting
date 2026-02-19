@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Copy } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Copy, Lock } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { Proposal, ProposalType } from "../types";
 
@@ -7,9 +7,10 @@ interface ProposalEditorProps {
   proposal: Proposal;
   onUpdate: (patch: Partial<Proposal>) => void;
   onDelete: () => void;
+  readonly?: boolean;
 }
 
-export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorProps) {
+export function ProposalEditor({ proposal, onUpdate, onDelete, readonly = false }: ProposalEditorProps) {
   const [descTab, setDescTab] = useState<"write" | "preview">("write");
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -53,10 +54,15 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-border-subtle">
+      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
         <h3 className="text-xs font-semibold text-text-primary">
-          Edit Proposal
+          {readonly ? "View Proposal" : "Edit Proposal"}
         </h3>
+        {readonly && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-text-muted">
+            <Lock size={10} /> Read-only
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -70,7 +76,8 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
             value={proposal.title}
             onChange={(e) => onUpdate({ title: e.target.value })}
             placeholder="Proposal title"
-            className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50"
+            readOnly={readonly}
+            className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 ${readonly ? "opacity-60 cursor-default" : ""}`}
           />
         </div>
 
@@ -107,7 +114,8 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
               onChange={(e) => onUpdate({ description: e.target.value })}
               placeholder="Describe this proposal..."
               rows={4}
-              className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 resize-none"
+              readOnly={readonly}
+              className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 resize-none ${readonly ? "opacity-60 cursor-default" : ""}`}
             />
           ) : (
             <div className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary min-h-[80px]">
@@ -143,18 +151,28 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
           </label>
           <div className="flex rounded-lg overflow-hidden border border-border-subtle">
             <button
-              onClick={() => handleTypeChange("binary")}
-              className={`flex-1 py-1.5 text-[11px] text-center transition-colors cursor-pointer ${
+              onClick={() => !readonly && handleTypeChange("binary")}
+              disabled={readonly}
+              className={`flex-1 py-1.5 text-[11px] text-center transition-colors border-r border-border-subtle ${
+                readonly
+                  ? "cursor-default opacity-60"
+                  : "cursor-pointer"
+              } ${
                 proposal.type === "binary"
-                  ? "bg-accent/20 text-accent-glow border-r border-border-subtle"
-                  : "bg-surface-2 text-text-muted hover:bg-surface-3 border-r border-border-subtle"
+                  ? "bg-accent/20 text-accent-glow"
+                  : "bg-surface-2 text-text-muted hover:bg-surface-3"
               }`}
             >
               Binary
             </button>
             <button
-              onClick={() => handleTypeChange("multi-choice")}
-              className={`flex-1 py-1.5 text-[11px] text-center transition-colors cursor-pointer ${
+              onClick={() => !readonly && handleTypeChange("multi-choice")}
+              disabled={readonly}
+              className={`flex-1 py-1.5 text-[11px] text-center transition-colors ${
+                readonly
+                  ? "cursor-default opacity-60"
+                  : "cursor-pointer"
+              } ${
                 proposal.type === "multi-choice"
                   ? "bg-accent/20 text-accent-glow"
                   : "bg-surface-2 text-text-muted hover:bg-surface-3"
@@ -174,10 +192,11 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
                   type="text"
                   value={option.label}
                   onChange={(e) => handleOptionChange(option.id, e.target.value)}
-                  className="flex-1 px-2.5 py-1.5 bg-surface-2 border border-border-subtle rounded-md text-xs text-text-primary focus:outline-none focus:border-accent/50"
+                  readOnly={readonly}
+                  className={`flex-1 px-2.5 py-1.5 bg-surface-2 border border-border-subtle rounded-md text-xs text-text-primary focus:outline-none focus:border-accent/50 ${readonly ? "opacity-60 cursor-default" : ""}`}
                   placeholder="Option label"
                 />
-                {proposal.type === "multi-choice" && proposal.options.length > 2 && (
+                {!readonly && proposal.type === "multi-choice" && proposal.options.length > 2 && (
                   <button
                     onClick={() => handleRemoveOption(option.id)}
                     className="p-1 text-text-muted hover:text-danger rounded cursor-pointer"
@@ -188,7 +207,7 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
               </div>
             ))}
           </div>
-          {proposal.type === "multi-choice" && (
+          {!readonly && proposal.type === "multi-choice" && (
             <button
               onClick={handleAddOption}
               className="flex items-center gap-1 mt-2 text-[11px] text-text-muted hover:text-accent-glow transition-colors cursor-pointer"
@@ -230,7 +249,8 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
                   type="checkbox"
                   checked={proposal.allowAbstain}
                   onChange={(e) => onUpdate({ allowAbstain: e.target.checked })}
-                  className="accent-accent"
+                  disabled={readonly}
+                  className={`accent-accent ${readonly ? "opacity-60 cursor-default" : ""}`}
                 />
                 <label className="text-[11px] text-text-secondary">
                   Allow abstain
@@ -242,18 +262,20 @@ export function ProposalEditor({ proposal, onUpdate, onDelete }: ProposalEditorP
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-3 border-t border-border-subtle flex items-center justify-between">
-        <button
-          onClick={onDelete}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-danger hover:bg-danger/10 rounded-md transition-colors cursor-pointer"
-        >
-          <Trash2 size={12} />
-          Delete Proposal
-        </button>
-        <button className="px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-md text-[11px] font-semibold transition-colors cursor-pointer">
-          Save
-        </button>
-      </div>
+      {!readonly && (
+        <div className="px-4 py-3 border-t border-border-subtle flex items-center justify-between">
+          <button
+            onClick={onDelete}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-danger hover:bg-danger/10 rounded-md transition-colors cursor-pointer"
+          >
+            <Trash2 size={12} />
+            Delete Proposal
+          </button>
+          <button className="px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-md text-[11px] font-semibold transition-colors cursor-pointer">
+            Save
+          </button>
+        </div>
+      )}
     </div>
   );
 }

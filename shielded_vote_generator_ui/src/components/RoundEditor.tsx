@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Settings2, X, Clock, RefreshCw, AlertTriangle } from "lucide-react";
+import { Settings2, X, Clock, RefreshCw, AlertTriangle, Lock } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
 import {
   useChainInfo,
@@ -11,6 +11,7 @@ interface RoundEditorProps {
   round: VotingRound;
   onUpdateName: (name: string) => void;
   onUpdateSettings: (patch: Partial<RoundSettings>) => void;
+  isReadonly?: boolean;
 }
 
 type DurationPreset =
@@ -104,7 +105,7 @@ function formatTimestamp(d: Date): string {
   });
 }
 
-export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEditorProps) {
+export function RoundEditor({ round, onUpdateName, onUpdateSettings, isReadonly = false }: RoundEditorProps) {
   const [showCustom, setShowCustom] = useState(false);
   const [nhLoading, setNhLoading] = useState(false);
   const [nhError, setNhError] = useState<string | null>(null);
@@ -167,6 +168,11 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
         <h3 className="text-xs font-semibold text-text-primary">
           Round Settings
         </h3>
+        {isReadonly && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-text-muted">
+            <Lock size={10} /> Read-only
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -180,7 +186,8 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             value={round.name}
             onChange={(e) => onUpdateName(e.target.value)}
             placeholder="e.g. NU7 Sentiment Polling"
-            className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50"
+            readOnly={isReadonly}
+            className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 ${isReadonly ? "opacity-60 cursor-default" : ""}`}
           />
         </div>
 
@@ -190,29 +197,31 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             <label className="text-[11px] text-text-secondary">
               Snapshot height
             </label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleUseNhHeight}
-                disabled={nhLoading}
-                className="text-[10px] text-accent hover:text-accent-glow disabled:opacity-50 cursor-pointer flex items-center gap-0.5"
-                title="NH — Nullifier Service Snapshot Height: the latest Zcash block the nullifier service has indexed. Voters must have shielded notes at or before this height."
-              >
-                <RefreshCw size={10} className={nhLoading ? "animate-spin" : ""} />
-                Use NH
-              </button>
-              {chain.latestHeight && (
-                <span className="text-[10px] text-text-muted flex items-center gap-1">
-                  tip: {chain.latestHeight.toLocaleString()}
-                  <button
-                    onClick={chain.refresh}
-                    className="p-0.5 hover:text-text-secondary cursor-pointer"
-                    title="Refresh"
-                  >
-                    <RefreshCw size={10} className={chain.loading ? "animate-spin" : ""} />
-                  </button>
-                </span>
-              )}
-            </div>
+            {!isReadonly && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleUseNhHeight}
+                  disabled={nhLoading}
+                  className="text-[10px] text-accent hover:text-accent-glow disabled:opacity-50 cursor-pointer flex items-center gap-0.5"
+                  title="NH — Nullifier Service Snapshot Height: the latest Zcash block the nullifier service has indexed. Voters must have shielded notes at or before this height."
+                >
+                  <RefreshCw size={10} className={nhLoading ? "animate-spin" : ""} />
+                  Use NH
+                </button>
+                {chain.latestHeight && (
+                  <span className="text-[10px] text-text-muted flex items-center gap-1">
+                    tip: {chain.latestHeight.toLocaleString()}
+                    <button
+                      onClick={chain.refresh}
+                      className="p-0.5 hover:text-text-secondary cursor-pointer"
+                      title="Refresh"
+                    >
+                      <RefreshCw size={10} className={chain.loading ? "animate-spin" : ""} />
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <input
             type="text"
@@ -223,7 +232,8 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
               onUpdateSettings({ snapshotHeight: val });
             }}
             placeholder="e.g. 2800000"
-            className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+            readOnly={isReadonly}
+            className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono ${isReadonly ? "opacity-60 cursor-default" : ""}`}
           />
 
           {/* Estimated timestamp */}
@@ -302,16 +312,18 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
                   {timeUntil(endTime)}
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  onUpdateSettings({ endTime: "" });
-                  setShowCustom(false);
-                }}
-                className="p-0.5 text-text-muted hover:text-danger rounded cursor-pointer"
-                title="Clear"
-              >
-                <X size={13} />
-              </button>
+              {!isReadonly && (
+                <button
+                  onClick={() => {
+                    onUpdateSettings({ endTime: "" });
+                    setShowCustom(false);
+                  }}
+                  className="p-0.5 text-text-muted hover:text-danger rounded cursor-pointer"
+                  title="Clear"
+                >
+                  <X size={13} />
+                </button>
+              )}
             </div>
           ) : (
             <p className="text-[11px] text-text-muted italic mb-2">
@@ -320,37 +332,39 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
           )}
 
           {/* Preset buttons */}
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {DURATION_PRESETS.map((preset) => (
+          {!isReadonly && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {DURATION_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  onClick={() => {
+                    const endTime =
+                      preset.minutes !== undefined
+                        ? addMinutes(preset.minutes)
+                        : addDays(preset.days);
+                    onUpdateSettings({ endTime });
+                    setShowCustom(false);
+                  }}
+                  className="px-2.5 py-1 bg-surface-2 border border-border-subtle hover:border-accent/40 hover:text-accent-glow text-text-secondary rounded-md text-[11px] transition-colors cursor-pointer"
+                >
+                  {preset.label}
+                </button>
+              ))}
               <button
-                key={preset.label}
-                onClick={() => {
-                  const endTime =
-                    preset.minutes !== undefined
-                      ? addMinutes(preset.minutes)
-                      : addDays(preset.days);
-                  onUpdateSettings({ endTime });
-                  setShowCustom(false);
-                }}
-                className="px-2.5 py-1 bg-surface-2 border border-border-subtle hover:border-accent/40 hover:text-accent-glow text-text-secondary rounded-md text-[11px] transition-colors cursor-pointer"
+                onClick={() => setShowCustom(!showCustom)}
+                className={`px-2.5 py-1 border rounded-md text-[11px] transition-colors cursor-pointer ${
+                  showCustom
+                    ? "bg-accent/10 border-accent/40 text-accent-glow"
+                    : "bg-surface-2 border-border-subtle text-text-secondary hover:border-accent/40 hover:text-accent-glow"
+                }`}
               >
-                {preset.label}
+                Custom...
               </button>
-            ))}
-            <button
-              onClick={() => setShowCustom(!showCustom)}
-              className={`px-2.5 py-1 border rounded-md text-[11px] transition-colors cursor-pointer ${
-                showCustom
-                  ? "bg-accent/10 border-accent/40 text-accent-glow"
-                  : "bg-surface-2 border-border-subtle text-text-secondary hover:border-accent/40 hover:text-accent-glow"
-              }`}
-            >
-              Custom...
-            </button>
-          </div>
+            </div>
+          )}
 
           {/* Custom picker */}
-          {showCustom && (
+          {!isReadonly && showCustom && (
             <div className="flex items-center gap-2">
               <input
                 type="date"
@@ -388,7 +402,8 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             onChange={(e) => onUpdateSettings({ description: e.target.value })}
             placeholder="Describe the purpose of this voting round..."
             rows={4}
-            className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 resize-none"
+            readOnly={isReadonly}
+            className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 resize-none ${isReadonly ? "opacity-60 cursor-default" : ""}`}
           />
         </div>
       </div>

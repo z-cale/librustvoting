@@ -13,6 +13,7 @@ interface TopBarProps {
   onArchive: () => void;
   onDelete: () => void;
   onNavigate: (section: string) => void;
+  isReadonly?: boolean;
 }
 
 export function TopBar({
@@ -25,6 +26,7 @@ export function TopBar({
   onArchive,
   onDelete,
   onNavigate,
+  isReadonly = false,
 }: TopBarProps) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -65,7 +67,7 @@ export function TopBar({
     <div className="flex items-center justify-between px-4 py-2.5 bg-surface-1 border-b border-border min-h-[48px]">
       {/* Left */}
       <div className="flex items-center gap-3 min-w-0">
-        {editing ? (
+        {editing && !isReadonly ? (
           <input
             ref={inputRef}
             value={tempName}
@@ -83,10 +85,11 @@ export function TopBar({
         ) : (
           <h2
             onClick={() => {
+              if (isReadonly) return;
               setTempName(round.name);
               setEditing(true);
             }}
-            className="text-sm font-semibold text-text-primary cursor-pointer hover:text-accent-glow truncate"
+            className={`text-sm font-semibold text-text-primary truncate ${isReadonly ? "" : "cursor-pointer hover:text-accent-glow"}`}
           >
             {round.name}
           </h2>

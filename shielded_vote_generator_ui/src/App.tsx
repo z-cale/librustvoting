@@ -239,6 +239,7 @@ function App() {
                 setSection("rounds");
               }}
               onNavigate={handleNavigate}
+              isReadonly={store.activeRound.status === "published"}
             />
             <div className="flex flex-1 overflow-hidden">
               <div className="w-[380px] min-w-[320px] border-r border-border bg-surface-0 overflow-hidden">
@@ -258,6 +259,7 @@ function App() {
                   onReorder={(from, to) =>
                     store.reorderProposals(store.activeRound!.id, from, to)
                   }
+                  isReadonly={store.activeRound.status === "published"}
                 />
               </div>
               <RightPanel
@@ -284,6 +286,7 @@ function App() {
                     store.activeProposal!.id
                   )
                 }
+                readonly={store.activeRound.status === "published"}
               />
             </div>
           </>
@@ -367,6 +370,7 @@ function RightPanel({
   onUpdateRoundSettings,
   onUpdateProposal,
   onDeleteProposal,
+  readonly = false,
 }: {
   round: VotingRound;
   activeProposal: Proposal | null;
@@ -374,6 +378,7 @@ function RightPanel({
   onUpdateRoundSettings: (patch: Partial<RoundSettings>) => void;
   onUpdateProposal: (patch: Partial<Proposal>) => void;
   onDeleteProposal: () => void;
+  readonly?: boolean;
 }) {
   const [tab, setTab] = useState<"proposal" | "round">(
     activeProposal ? "proposal" : "round"
@@ -417,6 +422,7 @@ function RightPanel({
             round={round}
             onUpdateName={onUpdateRoundName}
             onUpdateSettings={onUpdateRoundSettings}
+            isReadonly={readonly}
           />
         )}
         {effectiveTab === "proposal" && activeProposal && (
@@ -425,6 +431,7 @@ function RightPanel({
             proposal={activeProposal}
             onUpdate={onUpdateProposal}
             onDelete={onDeleteProposal}
+            readonly={readonly}
           />
         )}
       </div>
