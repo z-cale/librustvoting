@@ -31,8 +31,8 @@ public struct VotingServiceConfig: Codable, Equatable, Sendable {
         case nullifierProviders = "nullifier_providers"
     }
 
-    /// CDN URL for the production config (auto-deployed via Vercel).
-    public static let cdnURL = URL(string: "https://zally-phi.vercel.app/voting-config.json")!
+    /// CDN URL for the production config (served from Vercel Edge Config).
+    public static let cdnURL = URL(string: "https://zally-phi.vercel.app/api/voting-config")!
 
     /// Filename for a local override bundled in the app (takes priority over CDN).
     public static let localOverrideFilename = "voting-config-local.json"
@@ -41,7 +41,7 @@ public struct VotingServiceConfig: Codable, Equatable, Sendable {
     /// Points at the deployed dev server so TestFlight builds work without CDN.
     public static let fallback = VotingServiceConfig(
         version: 1,
-        voteServers: [ServiceEndpoint(url: "http://46.101.255.48:1318", label: "Primary")],
-        nullifierProviders: [ServiceEndpoint(url: "http://46.101.255.48:3000", label: "Primary")]
+        voteServers: [ServiceEndpoint(url: "https://46-101-255-48.sslip.io", label: "Primary")],
+        nullifierProviders: [ServiceEndpoint(url: "https://46-101-255-48.sslip.io/nullifier", label: "Primary")]
     )
 }
