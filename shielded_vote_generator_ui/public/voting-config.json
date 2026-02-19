@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "vote_servers": [
-    { "url": "https://46-101-255-48.sslip.io", "label": "Primary" }
-  ],
-  "nullifier_providers": [
-    { "url": "https://46-101-255-48.sslip.io/nullifier", "label": "Primary" }
-  ]
-}
