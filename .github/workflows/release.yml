@@ -160,3 +160,73 @@ jobs:
         with:
           files: ${{ env.TARBALL }}
           generate_release_notes: true
+
+  distribute:
+    name: Distribute to server
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download SDK binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: sdk-binaries
+          path: sdk-binaries
+
+      - name: Download ingest binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: ingest-binaries
+          path: ingest-binaries
+
+      - name: Assemble tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          DIR="zally-${VERSION}-linux-amd64"
+          mkdir -p "${DIR}/bin" "${DIR}/systemd" "${DIR}/scripts" "${DIR}/config"
+
+          cp sdk-binaries/zallyd sdk-binaries/create-val-tx "${DIR}/bin/"
+          cp ingest-binaries/query-server "${DIR}/bin/"
+          cp ingest-binaries/ingest-nfs "${DIR}/bin/"
+          chmod +x "${DIR}/bin/"*
+
+          for f in sdk/docs/zallyd-val{1,2,3}.service; do
+            name=$(basename "$f")
+            sed -e 's|/opt/zally-chain|/opt/zally|g' \
+                -e 's|ExecStart=/opt/zally/zallyd|ExecStart=/opt/zally/bin/zallyd|' \
+                "$f" > "${DIR}/systemd/${name}"
+          done
+
+          sed -e 's|WorkingDirectory=/opt/nullifier-ingest|WorkingDirectory=/opt/zally/nullifier-data|' \
+              -e 's|DATA_DIR=/opt/nullifier-ingest|DATA_DIR=/opt/zally/nullifier-data|' \
+              -e 's|ExecStart=/opt/nullifier-ingest/query-server|ExecStart=/opt/zally/bin/query-server|' \
+              nullifier-ingest/docs/nullifier-query-server.service > "${DIR}/systemd/nullifier-query-server.service"
+
+          cp sdk/scripts/init_multi_ci.sh "${DIR}/scripts/"
+          cp sdk/deploy/Caddyfile "${DIR}/config/"
+
+          tar czf "${DIR}.tar.gz" "${DIR}"
+          echo "TARBALL=${DIR}.tar.gz" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CEREMONY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${{ secrets.DEPLOY_HOST }}
+            User ${{ secrets.DEPLOY_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Upload release assets to server
+        run: |
+          ssh deploy-target "mkdir -p /opt/zally-chain/releases"
+          scp "${{ env.TARBALL }}" deploy-target:/opt/zally-chain/releases/
+          scp join.sh deploy-target:/opt/zally-chain/releases/join.sh
+          ssh deploy-target "ln -sf /opt/zally-chain/releases/${{ env.TARBALL }} /opt/zally-chain/releases/latest.tar.gz && echo '${{ env.VERSION }}' > /opt/zally-chain/releases/version.txt"

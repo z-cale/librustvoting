@@ -35,14 +35,20 @@ gh release view v0.0.1
 
 ### Step 1 — Run the join script
 
-On a fresh Ubuntu server (requires a GitHub PAT with `repo` scope since the repo is private):
+**Option A** — No GitHub access needed (binaries served from chain server):
+
+```bash
+curl -fsSL https://46-101-255-48.sslip.io/releases/join.sh | bash
+```
+
+**Option B** — Via GitHub (requires a PAT with `repo` scope):
 
 ```bash
 export GITHUB_TOKEN=ghp_xxx
 curl -fsSL -H "Authorization: token $GITHUB_TOKEN" https://raw.githubusercontent.com/z-cale/zally/main/join.sh | bash
 ```
 
-Prompts for a validator name, then downloads binaries, genesis, and configures everything. At the end it prints the validator address and path to `start.sh`.
+Both do the same thing: prompt for a validator name, download binaries, genesis, and configure everything. At the end it prints the validator address and path to `start.sh`.
 
 ### Step 2 — Get funded
 
