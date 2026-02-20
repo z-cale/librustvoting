@@ -16,7 +16,7 @@
 set -euo pipefail
 
 CHAIN_ID="zvote-1"
-INSTALL_DIR="${ZALLY_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${ZALLY_INSTALL_DIR:-$HOME/.local/bin}"
 HOME_DIR="${ZALLY_HOME:-$HOME/.zallyd}"
 DO_BASE="https://vote.fra1.digitaloceanspaces.com"
 
@@ -47,6 +47,14 @@ case "$ARCH_RAW" in
 esac
 
 PLATFORM="${OS}-${ARCH}"
+
+mkdir -p "${INSTALL_DIR}"
+
+# Ensure install dir is on PATH for this session and the generated start.sh.
+case ":${PATH}:" in
+  *":${INSTALL_DIR}:"*) ;;
+  *) export PATH="${INSTALL_DIR}:${PATH}" ;;
+esac
 
 for cmd in curl jq; do
   if ! command -v "$cmd" > /dev/null 2>&1; then
@@ -176,8 +184,15 @@ cat > "${START_SCRIPT}" <<STARTEOF
 set -euo pipefail
 
 HOME_DIR="${HOME_DIR}"
+INSTALL_DIR="${INSTALL_DIR}"
 MONIKER="${MONIKER}"
 LOG_FILE="\${HOME_DIR}/node.log"
+
+# Ensure binaries are on PATH.
+case ":\${PATH}:" in
+  *":\${INSTALL_DIR}:"*) ;;
+  *) export PATH="\${INSTALL_DIR}:\${PATH}" ;;
+esac
 
 echo "Starting zallyd..."
 echo "Logs: \${LOG_FILE}"
@@ -241,6 +256,24 @@ echo "  Moniker:  ${MONIKER}"
 echo "  Home:     ${HOME_DIR}"
 echo "  Address:  ${VALIDATOR_ADDR}"
 echo ""
+# Warn if install dir isn't in the user's shell profile PATH.
+SHELL_PROFILE=""
+if [ -f "$HOME/.zshrc" ]; then
+  SHELL_PROFILE="$HOME/.zshrc"
+elif [ -f "$HOME/.bashrc" ]; then
+  SHELL_PROFILE="$HOME/.bashrc"
+elif [ -f "$HOME/.bash_profile" ]; then
+  SHELL_PROFILE="$HOME/.bash_profile"
+fi
+
+if [ -n "$SHELL_PROFILE" ] && ! grep -q "${INSTALL_DIR}" "$SHELL_PROFILE" 2>/dev/null; then
+  if [ "${INSTALL_DIR}" != "/usr/local/bin" ] && [ "${INSTALL_DIR}" != "/usr/bin" ]; then
+    echo "  NOTE: Add ${INSTALL_DIR} to your PATH permanently:"
+    echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ${SHELL_PROFILE}"
+    echo ""
+  fi
+fi
+
 echo "=== Next steps ==="
 echo ""
 echo "1. Fund your account. Ask a teammate to trigger the"
