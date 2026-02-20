@@ -63,16 +63,16 @@ bootstrap: ## Download nullifier files from bootstrap URL if not present in DATA
 	fi
 
 ingest: ## Ingest nullifiers incrementally up to SYNC_HEIGHT (or chain tip if unset)
-	cd $(SERVICE_DIR) && DATA_DIR=$(DATA_DIR) LWD_URL=$(LWD_URL) $(_MAX_HEIGHT_ENV) cargo run --release --bin ingest-nfs
+	cd $(SERVICE_DIR) && DATA_DIR=../$(DATA_DIR) LWD_URL=$(LWD_URL) $(_MAX_HEIGHT_ENV) cargo run --release --bin ingest-nfs
 
 ingest-resync: ## Ingest nullifiers up to SYNC_HEIGHT and delete stale tree sidecar so server rebuilds
-	cd $(SERVICE_DIR) && DATA_DIR=$(DATA_DIR) LWD_URL=$(LWD_URL) INVALIDATE_TREE=1 $(_MAX_HEIGHT_ENV) cargo run --release --bin ingest-nfs
+	cd $(SERVICE_DIR) && DATA_DIR=../$(DATA_DIR) LWD_URL=$(LWD_URL) INVALIDATE_TREE=1 $(_MAX_HEIGHT_ENV) cargo run --release --bin ingest-nfs
 
 test-proof: ## Run exclusion proof verification against ingested data
-	cd $(SERVICE_DIR) && DATA_DIR=$(DATA_DIR) cargo run --release --bin test-non-inclusion
+	cd $(SERVICE_DIR) && DATA_DIR=../$(DATA_DIR) cargo run --release --bin test-non-inclusion
 
 serve: ## Start the exclusion proof query server
-	cd $(SERVICE_DIR) && DATA_DIR=$(DATA_DIR) PORT=$(PORT) cargo run --release --bin query-server
+	cd $(SERVICE_DIR) && DATA_DIR=../$(DATA_DIR) PORT=$(PORT) LWD_URL=$(LWD_URL) cargo run --release --bin query-server
 
 # Same binary and env as CI deploy; use for local testing before pushing.
 DEPLOY_DIR ?= nullifier-service
