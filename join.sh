@@ -168,8 +168,11 @@ LOG_FILE="\${HOME_DIR}/node.log"
 
 echo "Starting zallyd..."
 echo "Logs: \${LOG_FILE}"
-zallyd start --home "\${HOME_DIR}" >> "\${LOG_FILE}" 2>&1 &
+# setsid puts zallyd in its own session so terminal signals (Ctrl+C) don't reach it.
+setsid zallyd start --home "\${HOME_DIR}" >> "\${LOG_FILE}" 2>&1 &
 ZALLYD_PID=\$!
+
+trap "echo ''; echo 'zallyd is still running in the background (PID: \${ZALLYD_PID}).'; echo \"Stop it with: kill \${ZALLYD_PID}\"; echo \"Logs: \${LOG_FILE}\"; exit 0" INT TERM
 
 # Give the node a moment to start up.
 sleep 5
@@ -208,7 +211,7 @@ fi
 
 echo ""
 echo "Node is running (PID: \${ZALLYD_PID}). Logs: \${LOG_FILE}"
-echo "Press Ctrl+C to stop."
+echo "Press Ctrl+C to detach (node keeps running). To stop: kill \${ZALLYD_PID}"
 wait \$ZALLYD_PID
 STARTEOF
 

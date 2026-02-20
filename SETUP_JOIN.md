@@ -1,157 +1,101 @@
-# Sync a New Node and Create a Validator
+# Join the Zally Network as a Validator
 
-## Current Chain State
+## Requirements
 
-The genesis validator is already running:
+- Linux amd64
+- `curl` and `jq` installed
+- Funded validator account (see Step 2)
 
-- Chain ID: `zvote-1`
-- P2P: `0.0.0.0:26656` (externally accessible)
-- RPC: `127.0.0.1:26657` (local only — see note in Step 6)
-- REST API: port `1318`
-- Home: `~/.zallyd`
-- Binary: `/root/go/bin/zallyd` (not in `$PATH` — prefix commands with full path or add to PATH)
+## Step 1 — Run join.sh
 
-## Step 0 — Prerequisites on the New Node
-
-The `zallyd` binary must be built with the `halo2` and `redpallas` FFI tags. Clone the repo and install:
+Run the setup script. It downloads pre-built binaries, fetches the genesis and network config, initialises your node, generates cryptographic keys, and produces a ready-to-run `start.sh`.
 
 ```bash
-export GOPATH=$HOME/go
-export PATH=$PATH:$GOPATH/bin
-
-git clone https://github.com/z-cale/zally
-cd zally/sdk
-make install-ffi   # builds with -tags "halo2,redpallas"
+curl -fsSL https://raw.githubusercontent.com/z-cale/zally/main/join.sh | bash
 ```
 
-This places `zallyd` at `~/go/bin/zallyd`.
-
-## Step 1 — Initialize the Node
+You will be prompted for a **moniker** (a display name for your validator). To run non-interactively, set it as an env var:
 
 ```bash
-MONIKER=new-validator    # choose a name
-
-zallyd init $MONIKER --chain-id zvote-1
+ZALLY_MONIKER=my-validator \
+  curl -fsSL https://raw.githubusercontent.com/z-cale/zally/main/join.sh | bash
 ```
 
-## Step 2 — Copy genesis.json from the Genesis Validator
+### Optional env vars
 
-From **this host** (or expose the file via HTTP/SCP from the genesis node):
+| Variable | Default | Purpose |
+|---|---|---|
+| `ZALLY_MONIKER` | *(prompted)* | Validator display name |
+| `ZALLY_INSTALL_DIR` | `/usr/local/bin` | Where to install `zallyd` and `create-val-tx` |
+| `ZALLY_HOME` | `~/.zallyd` | Node home directory |
 
-```bash
-# On the genesis node, the genesis file is at:
-cat ~/.zallyd/config/genesis.json
+When `join.sh` finishes it prints your validator address:
 
-# On the new node, copy it:
-scp root@164.92.137.124:~/.zallyd/config/genesis.json ~/.zallyd/config/genesis.json
-
-Or if copy-pasting,
-nano genesis.json
-mv genesis.json ~/.zallyd/config/genesis.json
+```
+  Address:  zally1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Validate the genesis file:
+Save this — you need it for Step 2.
+
+## Step 2 — Fund your account
+
+Your account must hold stake before it can register as a validator. Ask a teammate to trigger the **"Fund validator"** GitHub Action with your address from Step 1.
+
+You can confirm the funds arrived once the node is synced (Step 3):
+
 ```bash
-zallyd genesis validate-genesis --home ~/.zallyd
+zallyd query bank balances <your-address> --node tcp://localhost:26657
 ```
 
-## Step 3 — Generate Cryptographic Keys
+## Step 3 — Start the node
+
+`join.sh` generated a `start.sh` in your home directory. Run it:
 
 ```bash
-zallyd init-validator-keys
-```
-
-This generates a Cosmos account key (keyring name `validator`, backend `test`), a Pallas keypair, and an EA keypair in one step. Use `--key-name`, `--keyring-backend`, or `--home` to override defaults.
-
-After running, save the printed address:
-
-```bash
-NEW_VAL_ADDR=$(zallyd keys show validator -a --keyring-backend test)
-echo "New validator address: $NEW_VAL_ADDR"
-```
-
-## Step 4 — Configure config.toml
-
-Edit `~/.zallyd/config/config.toml`:
-
-TODO: FIX
-```bash
-# Set persistent peer to the genesis validator
-sed -i 's|persistent_peers = ""|persistent_peers = "1a96912d840d4886dd1039187bf246b206ea7901@164.92.137.124:26656"|' ~/.zallyd/config/config.toml
-```
-
-## Step 5 — Configure app.toml
-
-Append the vote module config to `~/.zallyd/config/app.toml`:
-
-```bash
-cat >> ~/.zallyd/config/app.toml <<EOF
-
-[vote]
-ea_sk_path = "$HOME/.zallyd/ea.sk"
-pallas_sk_path = "$HOME/.zallyd/pallas.sk"
-comet_rpc = "http://localhost:26657"
-EOF
-```
-
-Also enable the REST API if needed:
-
-```bash
-sed -i '/\[api\]/,/\[.*\]/ s/enable = false/enable = true/' ~/.zallyd/config/app.toml
-sed -i 's|address = "tcp://localhost:1317"|address = "tcp://0.0.0.0:1518"|' ~/.zallyd/config/app.toml
-```
-
-## Step 6 — Fund the New Validator Account
-
-The new account must be funded before it can create a validator. From the **genesis validator** (on this host), send stake:
-
-```bash
-# On your machine
-zallyd keys show validator -a --keyring-backend test
-
-# On genesis validator machine. Set previous output to NEW_VAL_ADDR
-zallyd tx bank send validator $NEW_VAL_ADDR 20000000stake \
-  --keyring-backend test \
-  --chain-id zvote-1 \
-  --home ~/.zallyd \
-  --node tcp://127.0.0.1:26657 \
-  --yes
-```
-
-## Step 7 — Start the New Node and Wait for Sync
-
-```bash
-zallyd start
-
-# Monitor sync status
-watch -n2 'zallyd status --home $HOME 2>/dev/null | python3 -c "import sys,json; s=json.load(sys.stdin)[\"sync_info\"]; print(\"catching_up:\", s[\"catching_up\"], \"height:\", s[\"latest_block_height\"])"'
-```
-
-Wait until `catching_up: False` before proceeding.
-
-## Step 8 — Register as Validator via CreateValidatorWithPallasKey
-
-Use the `create-val-tx` helper tool (located in `sdk/scripts/create-val-tx`). From the repo:
-
-```bash
-cd /root/zally/sdk    # or wherever the repo is on the new node
-
-go run ./scripts/create-val-tx --moniker $MONIKER --amount 10000000stake --rpc-url tcp://localhost:26657
+~/.zallyd/start.sh
 ```
 
 This will:
+1. Start `zallyd` in the background, logging to `~/.zallyd/node.log`
+2. Poll sync status and print block height until the node is caught up
+3. Automatically call `create-val-tx` to register you as a validator once synced
 
-1. Read `priv_validator_key.json` from the new home for the consensus pubkey
-2. Read `pallas.pk` from the new home
-3. Build, sign, and broadcast `MsgCreateValidatorWithPallasKey` to the chain
-
-## Step 9 — Verify
+To follow logs while the node is running (in a separate terminal):
 
 ```bash
-# Check the new validator appears in the validator set
-zallyd query staking validators
+tail -f ~/.zallyd/node.log
 ```
 
-## Useful Commands
+## Step 4 — Verify
 
-- `make clean` - reset the chain home directory
+Once `start.sh` reports "Validator registered", confirm you appear in the validator set:
+
+```bash
+zallyd query staking validators --node tcp://localhost:26657
+```
+
+## Useful commands
+
+```bash
+# Check sync status
+zallyd status --home ~/.zallyd | jq '.sync_info'
+
+# Follow node logs
+tail -f ~/.zallyd/node.log
+
+# Stop the node
+pkill zallyd
+
+# Restart the node (after stopping)
+~/.zallyd/start.sh
+```
+
+## Chain info
+
+| | |
+|---|---|
+| Chain ID | `zvote-1` |
+| P2P port | `26656` |
+| RPC port | `26657` (localhost only) |
+| REST API port | `1317` (localhost only) |
+| Node home | `~/.zallyd` |
