@@ -1,0 +1,234 @@
+#!/bin/bash
+# join.sh — Join the Zally chain as a validator without needing Go or Rust.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/z-cale/zally/main/join.sh | bash
+#
+# What it does:
+#   1. Downloads pre-built zallyd + create-val-tx binaries
+#   2. Downloads genesis.json and network config from DO
+#   3. Initializes a node, generates cryptographic keys
+#   4. Configures the node to connect to the existing network
+#   5. Generates a start.sh script that handles sync + validator registration
+#
+# Requirements: Linux amd64, curl, jq
+
+set -euo pipefail
+
+REPO="z-cale/Shielded-Vote"
+CHAIN_ID="zvote-1"
+INSTALL_DIR="${ZALLY_INSTALL_DIR:-/usr/local/bin}"
+HOME_DIR="${ZALLY_HOME:-$HOME/.zallyd}"
+DO_BASE="https://vote.fra1.digitaloceanspaces.com"
+
+# ─── Preflight ────────────────────────────────────────────────────────────────
+
+echo "=== Zally validator join ==="
+echo ""
+
+ARCH=$(uname -m)
+if [ "$ARCH" != "x86_64" ]; then
+  echo "ERROR: Only amd64 (x86_64) is supported. Detected: $ARCH"
+  exit 1
+fi
+
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "ERROR: Only Linux is supported. Detected: $(uname -s)"
+  exit 1
+fi
+
+for cmd in curl jq; do
+  if ! command -v "$cmd" > /dev/null 2>&1; then
+    echo "ERROR: $cmd is required. Install it and re-run."
+    exit 1
+  fi
+done
+
+# ─── Prompt for moniker ──────────────────────────────────────────────────────
+
+if [ -n "${ZALLY_MONIKER:-}" ]; then
+  MONIKER="$ZALLY_MONIKER"
+else
+  printf "Enter a name for your validator: "
+  read -r MONIKER
+  if [ -z "$MONIKER" ]; then
+    echo "ERROR: Moniker cannot be empty."
+    exit 1
+  fi
+fi
+
+# ─── Download binaries ────────────────────────────────────────────────────────
+
+echo ""
+echo "=== Downloading binaries ==="
+
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
+TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | .browser_download_url')
+VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+
+if [ -z "$TARBALL_URL" ] || [ "$TARBALL_URL" = "null" ]; then
+  echo "ERROR: No release tarball found. Check https://github.com/${REPO}/releases"
+  exit 1
+fi
+
+echo "Version: ${VERSION}"
+curl -fsSL -o /tmp/zally-release.tar.gz "$TARBALL_URL"
+
+# Extract just the binaries we need.
+TARBALL_DIR="zally-${VERSION}-linux-amd64"
+tar xzf /tmp/zally-release.tar.gz -C /tmp "${TARBALL_DIR}/bin/zallyd" "${TARBALL_DIR}/bin/create-val-tx"
+
+cp "/tmp/${TARBALL_DIR}/bin/zallyd" "${INSTALL_DIR}/zallyd"
+cp "/tmp/${TARBALL_DIR}/bin/create-val-tx" "${INSTALL_DIR}/create-val-tx"
+chmod +x "${INSTALL_DIR}/zallyd" "${INSTALL_DIR}/create-val-tx"
+rm -rf /tmp/zally-release.tar.gz "/tmp/${TARBALL_DIR}"
+
+echo "Installed: ${INSTALL_DIR}/zallyd, ${INSTALL_DIR}/create-val-tx"
+
+# ─── Download network config ─────────────────────────────────────────────────
+
+echo ""
+echo "=== Downloading network config ==="
+
+NETWORK_JSON=$(curl -fsSL "${DO_BASE}/network.json")
+PERSISTENT_PEERS=$(echo "$NETWORK_JSON" | jq -r '.persistent_peers')
+echo "Peers: ${PERSISTENT_PEERS}"
+
+# ─── Initialize node ─────────────────────────────────────────────────────────
+
+echo ""
+echo "=== Initializing node ==="
+
+# Clean previous state if present.
+if [ -d "${HOME_DIR}" ]; then
+  echo "Removing existing ${HOME_DIR}..."
+  rm -rf "${HOME_DIR}"
+fi
+
+zallyd init "${MONIKER}" --chain-id "${CHAIN_ID}" --home "${HOME_DIR}" > /dev/null 2>&1
+
+# ─── Download and place genesis ───────────────────────────────────────────────
+
+echo "Downloading genesis.json..."
+curl -fsSL -o "${HOME_DIR}/config/genesis.json" "${DO_BASE}/genesis.json"
+zallyd genesis validate-genesis --home "${HOME_DIR}" > /dev/null 2>&1
+echo "Genesis validated."
+
+# ─── Generate keys ────────────────────────────────────────────────────────────
+
+echo ""
+echo "=== Generating cryptographic keys ==="
+
+zallyd init-validator-keys --home "${HOME_DIR}"
+
+VALIDATOR_ADDR=$(zallyd keys show validator -a --keyring-backend test --home "${HOME_DIR}")
+
+# ─── Configure config.toml ───────────────────────────────────────────────────
+
+echo ""
+echo "=== Configuring node ==="
+
+CONFIG_TOML="${HOME_DIR}/config/config.toml"
+
+# Set persistent peers.
+sed -i.bak "s|persistent_peers = \"\"|persistent_peers = \"${PERSISTENT_PEERS}\"|" "${CONFIG_TOML}"
+
+# Increase broadcast timeout for ZKP verification (~30-60s).
+sed -i.bak 's/^timeout_broadcast_tx_commit = .*/timeout_broadcast_tx_commit = "120s"/' "${CONFIG_TOML}"
+
+rm -f "${CONFIG_TOML}.bak"
+
+# ─── Configure app.toml ──────────────────────────────────────────────────────
+
+APP_TOML="${HOME_DIR}/config/app.toml"
+
+# Enable REST API with CORS.
+sed -i.bak '/\[api\]/,/\[.*\]/ s/enable = false/enable = true/' "${APP_TOML}"
+sed -i.bak '/\[api\]/,/\[.*\]/ s/enabled-unsafe-cors = false/enabled-unsafe-cors = true/' "${APP_TOML}"
+
+# Fix [vote] paths (template uses literal $HOME, replace with actual).
+sed -i.bak "s|\\\$HOME/.zallyd|${HOME_DIR}|g" "${APP_TOML}"
+
+rm -f "${APP_TOML}.bak"
+
+echo "Node configured."
+
+# ─── Generate start.sh ───────────────────────────────────────────────────────
+
+START_SCRIPT="${HOME_DIR}/start.sh"
+
+cat > "${START_SCRIPT}" <<STARTEOF
+#!/bin/bash
+# start.sh — Start the node, wait for sync, and register as a validator.
+# Generated by join.sh for moniker "${MONIKER}".
+set -euo pipefail
+
+HOME_DIR="${HOME_DIR}"
+MONIKER="${MONIKER}"
+
+echo "Starting zallyd..."
+zallyd start --home "\${HOME_DIR}" &
+ZALLYD_PID=\$!
+
+# Give the node a moment to start up.
+sleep 5
+
+echo "Waiting for node to sync..."
+while true; do
+  STATUS=\$(zallyd status --home "\${HOME_DIR}" 2>/dev/null || echo "")
+  if [ -z "\$STATUS" ]; then
+    sleep 2
+    continue
+  fi
+
+  CATCHING_UP=\$(echo "\$STATUS" | jq -r '.sync_info.catching_up' 2>/dev/null || echo "true")
+  HEIGHT=\$(echo "\$STATUS" | jq -r '.sync_info.latest_block_height' 2>/dev/null || echo "0")
+  echo "  height: \${HEIGHT}, catching_up: \${CATCHING_UP}"
+
+  if [ "\$CATCHING_UP" = "false" ]; then
+    echo "Node is synced."
+    break
+  fi
+  sleep 5
+done
+
+# Check if already a validator.
+IS_VALIDATOR=\$(zallyd query staking validators --home "\${HOME_DIR}" --output json 2>/dev/null \
+  | jq -r ".validators[] | select(.description.moniker == \"\${MONIKER}\") | .operator_address" 2>/dev/null || echo "")
+
+if [ -n "\$IS_VALIDATOR" ]; then
+  echo "Already registered as validator: \${IS_VALIDATOR}"
+else
+  echo "Registering as validator..."
+  create-val-tx --moniker "\${MONIKER}" --amount 5stake --home "\${HOME_DIR}"
+  echo "Validator registered."
+fi
+
+echo ""
+echo "Node is running (PID: \${ZALLYD_PID})."
+echo "Press Ctrl+C to stop."
+wait \$ZALLYD_PID
+STARTEOF
+
+chmod +x "${START_SCRIPT}"
+
+# ─── Summary ──────────────────────────────────────────────────────────────────
+
+echo ""
+echo "============================================="
+echo "       Node initialized successfully"
+echo "============================================="
+echo ""
+echo "  Moniker:  ${MONIKER}"
+echo "  Home:     ${HOME_DIR}"
+echo "  Address:  ${VALIDATOR_ADDR}"
+echo ""
+echo "=== Next steps ==="
+echo ""
+echo "1. Fund your account. Ask a teammate to trigger the"
+echo "   'Fund validator' GitHub Action with your address:"
+echo "   ${VALIDATOR_ADDR}"
+echo ""
+echo "2. Once funded, start your node (syncs and registers automatically):"
+echo "   ${START_SCRIPT}"
+echo ""
