@@ -197,8 +197,7 @@ esac
 
 echo "Starting zallyd..."
 echo "Logs: \${LOG_FILE}"
-# setsid puts zallyd in its own session so terminal signals (Ctrl+C) don't reach it.
-setsid zallyd start --home "\${HOME_DIR}" >> "\${LOG_FILE}" 2>&1 &
+zallyd start --home "\${HOME_DIR}" >> "\${LOG_FILE}" 2>&1 &
 ZALLYD_PID=\$!
 
 trap "echo ''; echo 'zallyd is still running in the background (PID: \${ZALLYD_PID}).'; echo \"Stop it with: kill \${ZALLYD_PID}\"; echo \"Logs: \${LOG_FILE}\"; exit 0" INT TERM
