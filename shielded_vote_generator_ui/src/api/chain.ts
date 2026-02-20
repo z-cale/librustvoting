@@ -71,6 +71,8 @@ export interface ChainRound {
   creator?: string;
   status?: string;
   description?: string;
+  title?: string;
+  created_at_height?: string;
   proposals?: Array<{
     id: number;
     title: string;

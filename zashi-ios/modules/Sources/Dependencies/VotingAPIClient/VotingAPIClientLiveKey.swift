@@ -219,7 +219,9 @@ private func parseVotingSession(from round: [String: Any]) throws -> VotingSessi
         creator: round["creator"] as? String ?? "",
         description: round["description"] as? String ?? "",
         proposals: proposals,
-        status: SessionStatus(rawValue: statusRaw) ?? .unspecified
+        status: SessionStatus(rawValue: statusRaw) ?? .unspecified,
+        createdAtHeight: parseUInt64(round["created_at_height"]),
+        title: round["title"] as? String ?? ""
     )
 }
 

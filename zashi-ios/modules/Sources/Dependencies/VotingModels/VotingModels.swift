@@ -20,6 +20,8 @@ public struct VotingSession: Equatable, Sendable {
     public let description: String
     public let proposals: [Proposal]
     public let status: SessionStatus
+    public let createdAtHeight: UInt64
+    public let title: String
 
     public init(
         voteRoundId: Data,
@@ -36,7 +38,9 @@ public struct VotingSession: Equatable, Sendable {
         creator: String,
         description: String = "",
         proposals: [Proposal],
-        status: SessionStatus
+        status: SessionStatus,
+        createdAtHeight: UInt64 = 0,
+        title: String = ""
     ) {
         self.voteRoundId = voteRoundId
         self.snapshotHeight = snapshotHeight
@@ -53,6 +57,8 @@ public struct VotingSession: Equatable, Sendable {
         self.description = description
         self.proposals = proposals
         self.status = status
+        self.createdAtHeight = createdAtHeight
+        self.title = title
     }
 }
 
