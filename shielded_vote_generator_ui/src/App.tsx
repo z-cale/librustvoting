@@ -148,6 +148,7 @@ function App() {
         proposals,
         nullifierApiBase: nullifierApiBase(),
         description: round.settings.description || round.name,
+        title: round.name,
       });
       if (result.code !== 0) {
         setPublishError(result.log || `Transaction failed with code ${result.code}`);
@@ -1929,9 +1930,9 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
     try {
       const resp = await chainApi.listRounds();
       const allRounds = (resp.rounds ?? []).sort((a, b) => {
-        const ta = Number(a.vote_end_time ?? 0);
-        const tb = Number(b.vote_end_time ?? 0);
-        return ta - tb;
+        const ha = Number(a.created_at_height ?? 0);
+        const hb = Number(b.created_at_height ?? 0);
+        return ha - hb;
       });
       setRounds(allRounds);
 
@@ -2080,7 +2081,7 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
                       <h2 className="text-sm font-semibold text-text-primary">
-                        Round {roundIdx + 1}
+                        {round.title || `Round ${roundIdx + 1}`}
                       </h2>
                       <span
                         className={`text-[9px] px-2 py-0.5 rounded-full shrink-0 ${statusInfo.color}`}

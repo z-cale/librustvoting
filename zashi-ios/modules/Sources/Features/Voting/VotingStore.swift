@@ -80,7 +80,9 @@ public struct Voting {
             public var id: String { session.voteRoundId.hexString }
             public let roundNumber: Int
             public let session: VotingSession
-            public var title: String { "Round \(roundNumber)" }
+            public var title: String {
+                session.title.isEmpty ? "Round \(roundNumber)" : session.title
+            }
         }
 
         public struct PendingVote: Equatable {
@@ -159,14 +161,14 @@ public struct Voting {
         /// Currently selected tab on the rounds list screen.
         public var selectedTab: RoundTab = .active
 
-        /// Computed: rounds that are active or tallying.
+        /// Computed: rounds that are active or tallying (newest first).
         public var activeRounds: [RoundListItem] {
-            allRounds.filter { $0.session.status == .active || $0.session.status == .tallying }
+            allRounds.filter { $0.session.status == .active || $0.session.status == .tallying }.reversed()
         }
 
-        /// Computed: rounds that are finalized.
+        /// Computed: rounds that are finalized (newest first).
         public var completedRounds: [RoundListItem] {
-            allRounds.filter { $0.session.status == .finalized }
+            allRounds.filter { $0.session.status == .finalized }.reversed()
         }
 
         /// Computed: rounds visible for the current tab.
@@ -383,7 +385,7 @@ public struct Voting {
 
         // Round status polling
         case startRoundStatusPolling
-        case roundStatusUpdated(SessionStatus)
+        case roundStatusUpdated(roundId: Data, SessionStatus)
 
         // Tally results
         case fetchTallyResults
@@ -456,8 +458,8 @@ public struct Voting {
             // MARK: - Rounds List
 
             case .allRoundsLoaded(let sessions):
-                // Sort by vote end time ascending to approximate creation order
-                let sorted = sessions.sorted { $0.voteEndTime < $1.voteEndTime }
+                // Sort by created_at_height ascending for reliable creation order
+                let sorted = sessions.sorted { $0.createdAtHeight < $1.createdAtHeight }
                 state.allRounds = sorted.enumerated().map { index, session in
                     State.RoundListItem(roundNumber: index + 1, session: session)
                 }
@@ -632,15 +634,25 @@ public struct Voting {
                     while !Task.isCancelled {
                         try await Task.sleep(for: .seconds(5))
                         let updated = try await votingAPI.fetchRoundById(roundIdHex)
-                        await send(.roundStatusUpdated(updated.status))
+                        await send(.roundStatusUpdated(roundId: updated.voteRoundId, updated.status))
                     }
                 } catch: { error, _ in
                     print("[Voting] Status polling error: \(error)")
                 }
                 .cancellable(id: cancelStatusPollingId, cancelInFlight: true)
 
-            case .roundStatusUpdated(let newStatus):
+            case .roundStatusUpdated(let polledRoundId, let newStatus):
                 guard let session = state.activeSession else { return .none }
+
+                // Guard against stale poll responses from a previously viewed
+                // round arriving after the user navigated to a different round.
+                // TCA effect cancellation is cooperative, so a queued action
+                // from the old poll can slip through.
+                guard polledRoundId == session.voteRoundId else {
+                    print("[Voting] roundStatusUpdated: ignoring stale poll for \(polledRoundId.hexString.prefix(16))..., active round is \(session.voteRoundId.hexString.prefix(16))...")
+                    return .none
+                }
+
                 // Only react to actual transitions
                 print("[Voting] roundStatusUpdated: old=\(session.status) new=\(newStatus)")
                 guard newStatus != session.status else { return .none }
@@ -661,7 +673,9 @@ public struct Voting {
                     creator: session.creator,
                     description: session.description,
                     proposals: session.proposals,
-                    status: newStatus
+                    status: newStatus,
+                    createdAtHeight: session.createdAtHeight,
+                    title: session.title
                 )
                 state.activeSession = updatedSession
 
@@ -1333,9 +1347,11 @@ public struct Voting {
 
     private func sessionBackedRound(from session: VotingSession, title: String, fallback: VotingRound) -> VotingRound {
         let proposals = session.proposals.isEmpty ? fallback.proposals : session.proposals
+        // Prefer the on-chain title, then the caller-provided title, then the fallback
+        let resolvedTitle = !session.title.isEmpty ? session.title : (!title.isEmpty ? title : fallback.title)
         return VotingRound(
             id: session.voteRoundId.hexString,
-            title: title.isEmpty ? fallback.title : title,
+            title: resolvedTitle,
             description: session.description.isEmpty ? fallback.description : session.description,
             snapshotHeight: session.snapshotHeight,
             snapshotDate: fallback.snapshotDate,

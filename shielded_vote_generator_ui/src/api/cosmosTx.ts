@@ -158,6 +158,7 @@ export interface CreateVotingSessionValue {
     options: Array<{ index: number; label: string }>;
   }>;
   description: string;
+  title: string;
 }
 
 // message MsgCreateVotingSession { ... } — see sdk/proto/zvote/v1/tx.proto
@@ -180,6 +181,7 @@ const MsgCreateVotingSessionProto = {
       writer.sub(11, encodeProposal(p));                                                 // 11 repeated
     }
     if (m.description !== "")          writer.uint32(98).string(m.description);          // 12 string
+    if (m.title !== "")                writer.uint32(106).string(m.title);               // 13 string
     return writer;
   },
   decode(): CreateVotingSessionValue {
@@ -199,6 +201,7 @@ const MsgCreateVotingSessionProto = {
       vkZkp3: object.vkZkp3 ?? new Uint8Array(),
       proposals: object.proposals ?? [],
       description: object.description ?? "",
+      title: object.title ?? "",
     };
   },
 };
@@ -481,6 +484,7 @@ export async function createVotingSession(
     snapshotHeight: number;
     voteEndTime: number;
     description: string;
+    title: string;
     nullifierApiBase: string;
     proposals: Array<{
       id: number;
@@ -517,6 +521,7 @@ export async function createVotingSession(
           vkZkp3: STUB_VK_ZKP3,
           proposals: params.proposals,
           description: params.description,
+          title: params.title,
         } satisfies CreateVotingSessionValue,
       },
     ],
