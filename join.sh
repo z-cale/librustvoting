@@ -2,7 +2,7 @@
 # join.sh — Join the Zally chain as a validator without needing Go or Rust.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/z-cale/zally/main/join.sh | bash
+#   curl -fsSL https://vote.fra1.digitaloceanspaces.com/join.sh | bash
 #
 # What it does:
 #   1. Downloads pre-built zallyd + create-val-tx binaries
