@@ -316,17 +316,15 @@ jobs:
           s3cmd -c /tmp/do-spaces.s3cfg put join.sh s3://vote/join.sh --acl-public --force
 
       - name: Set up SSH key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.CEREMONY_SSH_KEY }}
-
-      - name: Configure SSH host alias
         run: |
           mkdir -p ~/.ssh
+          echo "${{ secrets.CEREMONY_SSH_KEY }}" > ~/.ssh/ceremony_key
+          chmod 600 ~/.ssh/ceremony_key
           cat >> ~/.ssh/config <<EOF
           Host deploy-target
             HostName ${{ secrets.DEPLOY_HOST }}
             User ${{ secrets.DEPLOY_USER }}
+            IdentityFile ~/.ssh/ceremony_key
             StrictHostKeyChecking no
           EOF
 
