@@ -34,15 +34,40 @@ When writing PR descriptions, always describe changes relative to the target bra
 
 Do not create new migration files (e.g., `002_*.sql`). This is a pre-production codebase — modify the existing `001_init.sql` directly. Only create separate migrations if explicitly asked.
 
-## FFI Regeneration
+## FFI Builds
 
-After modifying `librustvoting` public API, `zcash-voting-ffi/rust/src/lib.rs`, or any types exposed through the FFI layer, you **must** regenerate the FFI bindings before committing:
+There are two xcframework build targets in `zcash-voting-ffi/`:
 
-```sh
-cd zcash-voting-ffi && make dev
-```
+- **`make dev-incr`** — Incremental build (~30s–2min). Use for Rust-only changes that don't touch the FFI interface (e.g., adding logs, fixing logic in `librustvoting` or `orchard`, tweaking circuit code). Skips clean and bindings regeneration, just recompiles changed crates and copies the `.a` into the xcframework.
 
-This rebuilds the xcframework binaries and regenerates `Sources/ZcashVotingFFI/zcash_voting_ffi.swift`. The generated Swift file and xcframework binaries must be committed alongside the Rust changes.
+- **`make dev`** — Full clean rebuild (~8min). Use when:
+  - The FFI public API changed (`zcash-voting-ffi/rust/src/lib.rs`, uniffi exports, types exposed through FFI)
+  - You need to regenerate Swift bindings (`Sources/ZcashVotingFFI/zcash_voting_ffi.swift`)
+  - The incremental build produces errors (stale artifacts)
+
+After modifying the FFI public API, you **must** run `make dev` and commit the regenerated Swift file and xcframework binaries alongside the Rust changes.
+
+## Local IMT (Nullifier Ingest) Service
+
+The IMT service lives in `nullifier-ingest/`. Data files (`nullifiers.bin`, `nullifiers.checkpoint`, `nullifiers.tree`) are stored at the `nullifier-ingest/` root, not in `nullifier-ingest/service/`.
+
+### Common operations (run from `nullifier-ingest/`):
+
+- **Check status:** `make status`
+- **Ingest to a specific height:** `make ingest SYNC_HEIGHT=<height>` (must be a multiple of 10)
+- **Ingest to chain tip:** `make ingest`
+- **Start query server:** `make serve` (runs on port 3000)
+- **Bootstrap from CDN:** `make bootstrap` (downloads pre-built snapshot files if not present)
+
+### Key notes:
+
+- `SYNC_HEIGHT` must be a **multiple of 10**
+- After ingesting new blocks, you **must delete the stale tree sidecar** before restarting the server, otherwise the server loads the old tree and returns height mismatches (HTTP 502). The full sequence is:
+  1. `make ingest SYNC_HEIGHT=<height>`
+  2. `rm nullifiers.tree`
+  3. `make serve` (rebuilds the tree from `.bin` on startup, ~3–5 min for 50M nullifiers)
+- Alternatively, use `make ingest-resync SYNC_HEIGHT=<height>` which deletes the tree sidecar automatically after ingestion
+- `eprintln!` from Rust code shows up in the Xcode debug console when testing the iOS app
 
 ## Code Change Guidelines
 

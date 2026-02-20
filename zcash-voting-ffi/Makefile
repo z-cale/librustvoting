@@ -17,10 +17,18 @@ CARGO_MANIFEST = rust/Cargo.toml
 
 # --- Main targets ---
 
-.PHONY: dev release clean bindings install sanitize-generated-whitespace
+.PHONY: dev dev-incr release clean bindings install sanitize-generated-whitespace
 
 install:
 	rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin aarch64-apple-darwin
+
+# Incremental dev build: skips clean, reuses cached compilation artifacts.
+# Use this for quick iteration (log changes, small fixes). ~30s–2min vs ~8min.
+dev-incr:
+	cargo build --manifest-path $(CARGO_MANIFEST) --target aarch64-apple-ios --release
+	cp rust/target/aarch64-apple-ios/release/lib$(LIB_NAME).a releases/$(FFI_NAME).xcframework/ios-arm64/$(FFI_NAME).framework/$(FFI_NAME)
+	cargo build --manifest-path $(CARGO_MANIFEST) --target aarch64-apple-ios-sim --release
+	cp rust/target/aarch64-apple-ios-sim/release/lib$(LIB_NAME).a releases/$(FFI_NAME).xcframework/ios-arm64_x86_64-simulator/$(FFI_NAME).framework/$(FFI_NAME)
 
 # Dev build: Apple Silicon only (arm64 device + arm64 simulator + arm64 macOS)
 dev: clean bindings
