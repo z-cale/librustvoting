@@ -9,6 +9,7 @@ Zally is a shielded voting protocol built on a Cosmos SDK chain. Votes are zero-
 | [SETUP_GENESIS.md](SETUP_GENESIS.md) | Bootstrap the genesis validator — build the binary, initialise the chain, open P2P, and record the node identity |
 | [SETUP_JOIN.md](SETUP_JOIN.md) | Add a new validator — sync a post-genesis node, fund it, and submit `MsgCreateValidatorWithPallasKey` |
 | [SETUP_CEREMONY.md](SETUP_CEREMONY.md) | Run the EA key ceremony — register Pallas keys, deal the encrypted EA secret key to all validators, and confirm |
+| [SETUP_NULLIFIER_SERVICE.md](SETUP_NULLIFIER_SERVICE.md) | Set up the nullifier service — install deps, bootstrap the snapshot, and start the exclusion proof query server |
 
 ## Architecture
 
