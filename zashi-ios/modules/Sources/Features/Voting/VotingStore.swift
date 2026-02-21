@@ -359,6 +359,7 @@ public struct Voting {
         case votingWeightLoaded(UInt64, [NoteInfo])
         case initializeFailed(String)
         case walletNotSynced(scannedHeight: UInt64, snapshotHeight: UInt64)
+        case walletSyncProgressUpdated(UInt64)
         case hotkeyLoaded(String)
         case startActiveRoundPipeline
 
@@ -671,9 +672,25 @@ public struct Voting {
                 state.screenStack = [.error(error)]
                 return .none
 
-            case .walletNotSynced(let scannedHeight, _):
+            case .walletNotSynced(let scannedHeight, let snapshotHeight):
                 state.walletScannedHeight = scannedHeight
                 state.screenStack = [.roundsList, .walletSyncing]
+                // Poll sync progress and auto-retry the pipeline once caught up
+                return .run { [sdkSynchronizer] send in
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(2))
+                        let height = UInt64(sdkSynchronizer.latestState().latestBlockHeight)
+                        await send(.walletSyncProgressUpdated(height))
+                        if height >= snapshotHeight {
+                            await send(.startActiveRoundPipeline)
+                            return
+                        }
+                    }
+                } catch: { _, _ in }
+                .cancellable(id: cancelPipelineId, cancelInFlight: true)
+
+            case .walletSyncProgressUpdated(let height):
+                state.walletScannedHeight = height
                 return .none
 
             case .hotkeyLoaded(let address):
