@@ -815,7 +815,7 @@ impl VotingDatabase {
     /// Build and prove the real delegation ZKP (#1). Long-running.
     ///
     /// Loads all required data from the voting DB and wallet DB, fetches IMT
-    /// exclusion proofs from the IMT server, generates a real Halo2 proof,
+    /// exclusion proofs from the PIR server, generates a real Halo2 proof,
     /// and advances the round phase to DelegationProved.
     ///
     /// - `round_id`: Voting round hex identifier.
