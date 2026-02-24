@@ -54,12 +54,26 @@ pub const NUM_WINDOWS: usize =
 pub const NUM_WINDOWS_SHORT: usize =
     (L_VALUE + FIXED_BASE_WINDOW_SIZE - 1) / FIXED_BASE_WINDOW_SIZE;
 
+/// Fixed bases used in scalar mul where the scalar is a base field element.
+///
+/// The ECC chip's `FixedPoints::Base` associated type must be a single type,
+/// so both `NullifierK` and `SpendAuthGBase` are wrapped in this enum.
+/// `SpendAuthGBase` reuses the same generator and U/Z tables as
+/// `OrchardFixedBasesFull::SpendAuthG` (same 85-window structure over the
+/// 255-bit pallas base field), allowing `FixedPointBaseField::mul` to accept
+/// an `AssignedCell` directly — no variable-base NonIdentityPoint witness needed.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum OrchardBaseFieldBases {
+    NullifierK,
+    SpendAuthGBase,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 // A sum type for both full-width and short bases. This enables us to use the
 // shared functionality of full-width and short fixed-base scalar multiplication.
 pub enum OrchardFixedBases {
     Full(OrchardFixedBasesFull),
-    NullifierK,
+    Base(OrchardBaseFieldBases),
     ValueCommitV,
 }
 
@@ -77,7 +91,13 @@ impl From<ValueCommitV> for OrchardFixedBases {
 
 impl From<NullifierK> for OrchardFixedBases {
     fn from(_nullifier_k: NullifierK) -> Self {
-        Self::NullifierK
+        Self::Base(OrchardBaseFieldBases::NullifierK)
+    }
+}
+
+impl From<OrchardBaseFieldBases> for OrchardFixedBases {
+    fn from(b: OrchardBaseFieldBases) -> Self {
+        Self::Base(b)
     }
 }
 
@@ -101,7 +121,7 @@ pub struct ValueCommitV;
 #[cfg(feature = "circuit")]
 impl FixedPoints<pallas::Affine> for OrchardFixedBases {
     type FullScalar = OrchardFixedBasesFull;
-    type Base = NullifierK;
+    type Base = OrchardBaseFieldBases;
     type ShortScalar = ValueCommitV;
 }
 
@@ -155,6 +175,36 @@ impl FixedPoint<pallas::Affine> for NullifierK {
 }
 
 #[cfg(feature = "circuit")]
+impl FixedPoint<pallas::Affine> for OrchardBaseFieldBases {
+    type FixedScalarKind = BaseFieldElem;
+
+    fn generator(&self) -> pallas::Affine {
+        match self {
+            Self::NullifierK => nullifier_k::generator(),
+            Self::SpendAuthGBase => spend_auth_g::generator(),
+        }
+    }
+
+    fn u(&self) -> Vec<[[u8; 32]; H]> {
+        match self {
+            Self::NullifierK => nullifier_k::U.to_vec(),
+            // SpendAuthG's full-scalar U/Z tables have the same 85-window
+            // structure as the base-field-element variant (pallas::Base and
+            // pallas::Scalar are both 255-bit); the precomputed values depend
+            // only on the generator and window layout, not the scalar kind.
+            Self::SpendAuthGBase => spend_auth_g::U.to_vec(),
+        }
+    }
+
+    fn z(&self) -> Vec<u64> {
+        match self {
+            Self::NullifierK => nullifier_k::Z.to_vec(),
+            Self::SpendAuthGBase => spend_auth_g::Z.to_vec(),
+        }
+    }
+}
+
+#[cfg(feature = "circuit")]
 impl FixedPoint<pallas::Affine> for ValueCommitV {
     type FixedScalarKind = ShortScalar;
 
@@ -168,5 +218,63 @@ impl FixedPoint<pallas::Affine> for ValueCommitV {
 
     fn z(&self) -> Vec<u64> {
         value_commit_v::Z_SHORT.to_vec()
+    }
+}
+
+#[cfg(all(test, feature = "circuit"))]
+mod tests {
+    use super::*;
+
+    /// Ensures that `OrchardBaseFieldBases::SpendAuthGBase` routes to the
+    /// correct generator and tables via the `FixedPoint` trait.  The U/Z data
+    /// is identical to `OrchardFixedBasesFull::SpendAuthG` (same generator,
+    /// same 85-window structure); this test makes the dispatch wiring explicit.
+    #[test]
+    fn spend_auth_g_base_field_routes_correctly() {
+        use halo2_gadgets::ecc::FixedPoint as _;
+
+        let full = OrchardFixedBasesFull::SpendAuthG;
+        let base = OrchardBaseFieldBases::SpendAuthGBase;
+
+        assert_eq!(
+            full.generator(),
+            base.generator(),
+            "SpendAuthGBase must share the SpendAuthG generator"
+        );
+        assert_eq!(
+            full.u(),
+            base.u(),
+            "SpendAuthGBase U tables must match SpendAuthG full-scalar U tables"
+        );
+        assert_eq!(
+            full.z(),
+            base.z(),
+            "SpendAuthGBase Z tables must match SpendAuthG full-scalar Z tables"
+        );
+    }
+
+    /// Ensures that `OrchardBaseFieldBases::NullifierK` still routes to the
+    /// NullifierK generator and tables (regression guard for the enum refactor).
+    #[test]
+    fn nullifier_k_base_field_routes_correctly() {
+        use halo2_gadgets::ecc::FixedPoint as _;
+
+        let base = OrchardBaseFieldBases::NullifierK;
+
+        assert_eq!(
+            base.generator(),
+            nullifier_k::generator(),
+            "OrchardBaseFieldBases::NullifierK must use the NullifierK generator"
+        );
+        assert_eq!(
+            base.u(),
+            nullifier_k::U.to_vec(),
+            "OrchardBaseFieldBases::NullifierK U tables must match"
+        );
+        assert_eq!(
+            base.z(),
+            nullifier_k::Z.to_vec(),
+            "OrchardBaseFieldBases::NullifierK Z tables must match"
+        );
     }
 }
