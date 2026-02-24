@@ -206,6 +206,39 @@ const MsgCreateVotingSessionProto = {
   },
 };
 
+// ── Protobuf type: MsgSend (cosmos.bank.v1beta1) ────────────────
+
+// message Coin { string denom = 1; string amount = 2; }
+// message MsgSend { string from_address = 1; string to_address = 2; repeated Coin amount = 3; }
+const MsgSendProto = {
+  encode(
+    message: { fromAddress: string; toAddress: string; amount: Array<{ denom: string; amount: string }> },
+    writer: ProtoWriter = ProtoWriter.create(),
+  ): ProtoWriter {
+    if (message.fromAddress !== "") writer.uint32(10).string(message.fromAddress); // field 1
+    if (message.toAddress !== "")   writer.uint32(18).string(message.toAddress);   // field 2
+    for (const coin of message.amount) {
+      const coinWriter = ProtoWriter.create();
+      if (coin.denom !== "")  coinWriter.uint32(10).string(coin.denom);  // Coin field 1
+      if (coin.amount !== "") coinWriter.uint32(18).string(coin.amount); // Coin field 2
+      writer.sub(3, coinWriter);                                          // field 3, repeated
+    }
+    return writer;
+  },
+  decode(): { fromAddress: string; toAddress: string; amount: Array<{ denom: string; amount: string }> } {
+    throw new Error("decode not implemented");
+  },
+  fromPartial(
+    object: Partial<{ fromAddress: string; toAddress: string; amount: Array<{ denom: string; amount: string }> }>,
+  ): { fromAddress: string; toAddress: string; amount: Array<{ denom: string; amount: string }> } {
+    return {
+      fromAddress: object.fromAddress ?? "",
+      toAddress: object.toAddress ?? "",
+      amount: object.amount ?? [],
+    };
+  },
+};
+
 // ── Registry ────────────────────────────────────────────────────
 
 function createRegistry(): Registry {
@@ -214,6 +247,8 @@ function createRegistry(): Registry {
   registry.register("/zvote.v1.MsgSetVoteManager", MsgSetVoteManagerProto as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registry.register("/zvote.v1.MsgCreateVotingSession", MsgCreateVotingSessionProto as any);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registry.register("/cosmos.bank.v1beta1.MsgSend", MsgSendProto as any);
   return registry;
 }
 
@@ -523,6 +558,37 @@ export async function createVotingSession(
           description: params.description,
           title: params.title,
         } satisfies CreateVotingSessionValue,
+      },
+    ],
+  });
+}
+
+/**
+ * Sign and broadcast a cosmos.bank.v1beta1.MsgSend transaction.
+ *
+ * Used by the "Fund validator" UI to transfer stake tokens from the
+ * bootstrap operator to a validator address.
+ *
+ * @param amountUzvote - amount in micro-tokens (uzvote), e.g. "1000000" for 1 ZVOTE
+ */
+export async function fundValidator(
+  apiBase: string,
+  signer: OfflineDirectSigner,
+  toAddress: string,
+  amountUzvote: string,
+): Promise<BroadcastResult> {
+  const [account] = await signer.getAccounts();
+  return signAndBroadcast({
+    apiBase,
+    signer,
+    messages: [
+      {
+        typeUrl: "/cosmos.bank.v1beta1.MsgSend",
+        value: {
+          fromAddress: account.address,
+          toAddress,
+          amount: [{ denom: "uzvote", amount: amountUzvote }],
+        },
       },
     ],
   });
