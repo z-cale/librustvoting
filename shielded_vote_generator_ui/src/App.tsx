@@ -2477,6 +2477,24 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                   )}
                 </div>
 
+                {/* Ceremony log */}
+                {round.ceremony_log && round.ceremony_log.length > 0 && (
+                  <div className="px-5 pb-3">
+                    <details className="group">
+                      <summary className="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary select-none">
+                        Ceremony log ({round.ceremony_log.length} entries)
+                      </summary>
+                      <div className="mt-1.5 bg-surface-2 rounded-md p-2 max-h-40 overflow-y-auto">
+                        {round.ceremony_log.map((entry, i) => (
+                          <div key={i} className="text-[10px] font-mono text-text-secondary leading-relaxed">
+                            {entry}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                )}
+
                 {/* Proposals */}
                 {summary?.proposals && summary.proposals.length > 0 && (
                   <div className="px-5 pb-4 space-y-3">

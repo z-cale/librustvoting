@@ -89,6 +89,7 @@ export interface ChainRound {
   ceremony_dealer?: string;
   ceremony_phase_start?: string;
   ceremony_phase_timeout?: string;
+  ceremony_log?: string[];
 }
 
 export interface TallyResult {
