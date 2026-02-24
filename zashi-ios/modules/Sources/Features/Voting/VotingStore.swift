@@ -1064,6 +1064,7 @@ public struct Voting {
                 state.pendingUnsignedDelegationPczt = nil
                 state.keystoneSigningStatus = .idle
                 state.currentKeystoneBundleIndex = 0
+                state.isDelegationProofInFlight = false
                 return .send(.startDelegationProof)
 
             // MARK: - Background ZKP Delegation
@@ -1377,6 +1378,7 @@ public struct Voting {
             case .keystoneBundleAdvance:
                 // Move to the next bundle and loop back into the Keystone signing flow
                 state.currentKeystoneBundleIndex += 1
+                state.isDelegationProofInFlight = false
                 return .send(.startDelegationProof)
 
             case .spendAuthSignatureExtractionFailed(let error):
