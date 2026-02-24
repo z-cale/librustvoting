@@ -8,11 +8,10 @@
 //! be chosen before proof generation starts.
 
 use crate::payloads::{
-    DealerPayloadInput, DelegationBundlePayload, SetupRoundFields,
+    DelegationBundlePayload, SetupRoundFields,
 };
 use blake2b_simd::Params as Blake2bParams;
 use ff::{Field, PrimeField};
-use group::GroupEncoding;
 use incrementalmerkletree::{Hashable, Level};
 use orchard::{
     delegation::{
@@ -457,121 +456,20 @@ pub fn load_multi_validator_info() -> Vec<ValidatorInfo> {
     result
 }
 
-/// Ensure the ceremony is idle (REGISTERING with phase_timeout=0, or nil).
+// ensure_ceremony_idle removed: per-round ceremony has no singleton state to reset.
+
+/// Register all validators' Pallas keys in the global registry.
 ///
-/// Handles various starting states after `init_multi.sh`:
-/// - Active REGISTERING/DEALT: wait for EndBlocker timeout to reset (~120–150s)
-/// - CONFIRMED: broadcast MsgReInitializeElectionAuthority
-/// - Idle REGISTERING/nil: already ready
-pub fn ensure_ceremony_idle(validators: &[ValidatorInfo]) {
-    use crate::api::{
-        broadcast_cosmos_msg, default_cosmos_tx_config,
-        get_ceremony_state_json, get_ceremony_status, wait_for_ceremony_status,
-        CEREMONY_STATUS_CONFIRMED, CEREMONY_STATUS_DEALT, CEREMONY_STATUS_REGISTERING,
-    };
-    use crate::payloads::reinitialize_ea_payload;
-
-    let status = get_ceremony_status();
-    eprintln!("[E2E] Current ceremony status: {:?}", status);
-
-    match status {
-        Some(s) if s == CEREMONY_STATUS_REGISTERING => {
-            // Check if idle (phase_timeout=0) or active.
-            let ceremony = get_ceremony_state_json();
-            let phase_timeout = ceremony
-                .as_ref()
-                .and_then(|c| c.get("phase_timeout"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
-            if phase_timeout == 0 {
-                eprintln!("[E2E] Ceremony already idle REGISTERING (phase_timeout=0)");
-                return;
-            }
-            eprintln!(
-                "[E2E] Ceremony is active REGISTERING (phase_timeout={}), waiting for EndBlocker timeout...",
-                phase_timeout
-            );
-            // Wait for the EndBlocker to reset to idle REGISTERING.
-            // We poll until phase_timeout becomes 0.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
-            while std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(2000));
-                let c = get_ceremony_state_json();
-                let pt = c
-                    .as_ref()
-                    .and_then(|c| c.get("phase_timeout"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
-                if pt == 0 {
-                    eprintln!("[E2E] Ceremony reset to idle REGISTERING");
-                    return;
-                }
-            }
-            panic!("timeout waiting for ceremony to reset to idle REGISTERING");
-        }
-        Some(s) if s == CEREMONY_STATUS_DEALT => {
-            eprintln!(
-                "[E2E] Ceremony is DEALT, waiting for EndBlocker timeout...",
-            );
-            // After timeout, ceremony resets to idle REGISTERING.
-            wait_for_ceremony_status(CEREMONY_STATUS_REGISTERING, 150_000)
-                .expect("ceremony should timeout and reset to REGISTERING");
-        }
-        Some(s) if s == CEREMONY_STATUS_CONFIRMED => {
-            eprintln!("[E2E] Ceremony is CONFIRMED, sending reinitialize-ea...");
-            let body = reinitialize_ea_payload(&validators[0].account_address);
-            let mut msg = body;
-            msg["@type"] = serde_json::json!("/zvote.v1.MsgReInitializeElectionAuthority");
-            let config = default_cosmos_tx_config();
-            let (http_status, json) = broadcast_cosmos_msg(&msg, &config)
-                .expect("broadcast reinitialize-ea");
-            assert!(
-                http_status == 200
-                    && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-                "reinitialize-ea failed: HTTP {}, body={:?}",
-                http_status,
-                json
-            );
-            // Wait for the tx to commit.
-            std::thread::sleep(std::time::Duration::from_millis(6000));
-        }
-        None | Some(0) => {
-            eprintln!("[E2E] No ceremony state, good to go");
-            return;
-        }
-        _ => panic!("unexpected ceremony status: {:?}", status),
-    }
-
-    // Verify we're now idle REGISTERING or nil.
-    let final_status = get_ceremony_status();
-    assert!(
-        final_status == Some(CEREMONY_STATUS_REGISTERING) || final_status.is_none(),
-        "expected idle REGISTERING or nil after ensure, got {:?}",
-        final_status
-    );
-}
-
-/// Bootstrap a full multi-validator ceremony: register all Pallas keys,
-/// ECIES-encrypt ea_sk to each validator, deal, and wait for CONFIRMED.
+/// In the per-round ceremony model, Pallas keys are registered once globally
+/// and reused across rounds. This is typically done during chain init via
+/// MsgCreateValidatorWithPallasKey, but this function handles the case where
+/// keys need to be registered explicitly (e.g., after init without Pallas keys).
 ///
-/// `ea_sk_bytes` is the 32-byte EA secret key scalar (little-endian).
-/// `ea_pk_bytes` is the 32-byte compressed EA public key.
-pub fn bootstrap_ceremony_multi(
-    validators: &[ValidatorInfo],
-    ea_sk_bytes: &[u8],
-    ea_pk_bytes: &[u8],
-) {
-    use crate::api::{broadcast_cosmos_msg, CosmosTxConfig, wait_for_ceremony_confirmed};
-    use crate::ecies;
-    use crate::payloads::{deal_ea_key_payload, register_pallas_key_payload, DealerPayloadInput};
+/// Ignores "already registered" errors (idempotent).
+pub fn register_pallas_keys_multi(validators: &[ValidatorInfo]) {
+    use crate::api::{broadcast_cosmos_msg, CosmosTxConfig};
+    use crate::payloads::register_pallas_key_payload;
 
-    let mut rng = OsRng;
-
-    // Step 1: Register all validators' Pallas keys.
-    // Each validator signs with their own keyring from their own home dir.
-    // creator must be the account address (zvote1...); the keeper converts to valoper.
     for (i, val) in validators.iter().enumerate() {
         eprintln!(
             "[E2E] Registering Pallas key for validator {} (account={})...",
@@ -587,254 +485,77 @@ pub fn bootstrap_ceremony_multi(
             node_url: std::env::var("ZALLY_NODE_URL")
                 .unwrap_or_else(|_| "tcp://localhost:26157".to_string()),
         };
-        let (status, json) = broadcast_cosmos_msg(&msg, &config)
-            .expect("broadcast register-pallas-key");
-        assert!(
-            status == 200 && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-            "register-pallas-key failed for val{}: HTTP {}, body={:?}",
-            i + 1,
-            status,
-            json
-        );
-        // Small delay between registrations so each lands in its own block.
+        match broadcast_cosmos_msg(&msg, &config) {
+            Ok((status, json)) => {
+                let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+                if status == 200 && code == 0 {
+                    eprintln!("[E2E] Pallas key registered for val{}", i + 1);
+                } else {
+                    // Already registered is fine — log and continue.
+                    eprintln!(
+                        "[E2E] Pallas key registration for val{} returned code={} (may be already registered)",
+                        i + 1, code
+                    );
+                }
+            }
+            Err(e) => eprintln!("[E2E] Pallas key registration for val{} failed: {} (may be already registered)", i + 1, e),
+        }
         std::thread::sleep(std::time::Duration::from_millis(2000));
     }
 
     // Wait for the last registration to commit.
     std::thread::sleep(std::time::Duration::from_millis(6000));
-
-    // Step 2: ECIES-encrypt ea_sk to each validator's Pallas PK and deal.
-    eprintln!(
-        "[E2E] Dealing EA key to {} validators...",
-        validators.len()
-    );
-    let mut dealer_payloads = Vec::new();
-    for val in validators {
-        let recipient_pk =
-            Option::<pallas::Point>::from(pallas::Point::from_bytes(&val.pallas_pk))
-                .expect("pallas.pk is a valid Pallas point");
-        let envelope = ecies::encrypt(&recipient_pk, ea_sk_bytes, &mut rng);
-
-        // validator_address in the payload must match what RegisterPallasKey
-        // stored (valoper format, after the keeper's account→valoper conversion).
-        dealer_payloads.push(DealerPayloadInput {
-            validator_address: val.operator_address.clone(),
-            ephemeral_pk: envelope.ephemeral_pk.to_vec(),
-            ciphertext: envelope.ciphertext,
-        });
-    }
-
-    // deal creator must be the account address for tx signing.
-    let body = deal_ea_key_payload(
-        &validators[0].account_address,
-        ea_pk_bytes,
-        &dealer_payloads,
-    );
-    let mut msg = body;
-    msg["@type"] = serde_json::json!("/zvote.v1.MsgDealExecutiveAuthorityKey");
-    let config = CosmosTxConfig {
-        key_name: "validator".to_string(),
-        home_dir: validators[0].home_dir.clone(),
-        chain_id: "zvote-1".to_string(),
-        node_url: std::env::var("ZALLY_NODE_URL")
-            .unwrap_or_else(|_| "tcp://localhost:26157".to_string()),
-    };
-    let (status, json) =
-        broadcast_cosmos_msg(&msg, &config).expect("broadcast deal-ea-key");
-    assert!(
-        status == 200 && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-        "deal-ea-key failed: HTTP {}, body={:?}",
-        status,
-        json
-    );
-
-    // Step 3: Wait for all validators to auto-ack via PrepareProposal.
-    // With 3 validators and round-robin proposing (~6s blocks), this takes
-    // roughly 3 blocks = ~18s. Give generous timeout.
-    eprintln!(
-        "[E2E] Waiting for {} auto-acks → CONFIRMED...",
-        validators.len()
-    );
-    wait_for_ceremony_confirmed(90_000)
-        .expect("ceremony should reach CONFIRMED via auto-ack");
-    eprintln!("[E2E] Ceremony CONFIRMED ✓");
+    eprintln!("[E2E] Pallas key registration complete");
 }
 
 // ---------------------------------------------------------------------------
 // Single-validator ceremony helpers
 // ---------------------------------------------------------------------------
 
-/// Bootstrap the EA key ceremony so the chain reaches CONFIRMED status.
+/// Ensure the chain validator's Pallas key is registered in the global registry.
 ///
-/// Performs the full ceremony: register the chain validator's Pallas key,
-/// deal the EA secret key (ECIES-encrypted to that Pallas key), then wait
-/// for the chain to auto-ack via PrepareProposal. Idempotent: if the
-/// ceremony is already CONFIRMED, returns immediately.
+/// In the per-round ceremony model, Pallas keys are registered once globally
+/// (usually during chain init via MsgCreateValidatorWithPallasKey). This
+/// function handles the case where the key wasn't registered during init.
 ///
-/// The function discovers the validator's operator address from the staking
-/// module and reads the validator's Pallas PK from disk (same directory as
-/// `ea.pk`). This ensures the ceremony participants match the actual chain
-/// validator, so PrepareProposal's auto-ack can find its ECIES payload and
-/// decrypt it with the on-disk Pallas SK.
-///
-/// `ea_sk_bytes` is the 32-byte EA secret key scalar (little-endian).
-/// `ea_pk_bytes` is the 32-byte compressed EA public key.
-pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
+/// Idempotent: if the key is already registered, the tx will be rejected by
+/// the keeper and the error is ignored.
+pub fn ensure_pallas_key_registered() {
     use crate::api::{
         broadcast_cosmos_msg, default_cosmos_tx_config, key_account_address,
-        get_ceremony_status, get_ceremony_validators, get_validator_operator_address,
-        wait_for_ceremony_confirmed, CEREMONY_STATUS_CONFIRMED,
     };
-    use crate::ecies;
-    use crate::payloads::{deal_ea_key_payload, register_pallas_key_payload};
+    use crate::payloads::register_pallas_key_payload;
 
-    // Check if already CONFIRMED (idempotent).
-    if get_ceremony_status() == Some(CEREMONY_STATUS_CONFIRMED) {
-        eprintln!("[E2E] Ceremony already CONFIRMED, skipping bootstrap");
-        return;
-    }
-
-    // Discover the chain validator's operator address from the staking module,
-    // then derive the account address from the keyring. The keeper's
-    // RegisterPallasKey expects an account address (zvote1...) as creator and
-    // converts it to valoper internally.
-    let validator_op_addr = get_validator_operator_address()
-        .expect("failed to query validator operator address from staking module");
     let config = default_cosmos_tx_config();
     let validator_addr = key_account_address(&config.key_name, &config.home_dir)
         .unwrap_or_else(|| panic!(
             "failed to get account address for key '{}' from keyring at {}",
             config.key_name, config.home_dir
         ));
-    eprintln!(
-        "[E2E] Ceremony: validator operator={}, account={}",
-        validator_op_addr, validator_addr
-    );
 
-    // Read the chain validator's Pallas PK from disk (generated by `zallyd pallas-keygen`
-    // during `make init`). The validator's matching SK is loaded by PrepareProposal
-    // for auto-ack ECIES decryption.
+    // Read the chain validator's Pallas PK from disk.
     let pallas_pk_path = std::env::var("ZALLY_PALLAS_PK_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").expect("HOME env var must be set");
         format!("{}/.zallyd/pallas.pk", home)
     });
-    eprintln!(
-        "[E2E] Ceremony: reading validator Pallas PK from {}",
-        pallas_pk_path
-    );
     let pallas_pk_bytes = std::fs::read(&pallas_pk_path)
         .unwrap_or_else(|e| panic!("failed to read Pallas PK from {}: {}", pallas_pk_path, e));
-    assert_eq!(
-        pallas_pk_bytes.len(),
-        32,
-        "Pallas PK must be exactly 32 bytes, got {}",
-        pallas_pk_bytes.len()
-    );
+    assert_eq!(pallas_pk_bytes.len(), 32, "Pallas PK must be exactly 32 bytes");
 
-    let config = default_cosmos_tx_config();
-    let mut rng = OsRng;
-
-    // Step 1: Register the validator's Pallas key (idempotent — duplicate
-    // registrations are accepted at the mempool but rejected in the block,
-    // which is fine if the key is already present from a prior run or from
-    // MsgCreateValidatorWithPallasKey).
-    eprintln!("[E2E] Ceremony: registering Pallas key for {} ...", validator_addr);
-    let already_registered = get_ceremony_validators()
-        .unwrap_or_default()
-        .iter()
-        .any(|(addr, _)| addr == &validator_op_addr);
-
-    if already_registered {
-        eprintln!("[E2E] Ceremony: Pallas key already registered, skipping MsgRegisterPallasKey");
-    } else {
-        let mut msg = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
-        msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
-        let (status, json) = broadcast_cosmos_msg(&msg, &config)
-            .expect("broadcast register-pallas-key");
-        assert!(
-            status == 200
-                && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-            "register-pallas-key failed: HTTP {}, body={:?}",
-            status,
-            json
-        );
-        // Wait one block for state to commit before dealing.
-        std::thread::sleep(std::time::Duration::from_millis(6000));
-    }
-
-    // Step 2: ECIES-encrypt ea_sk to EVERY validator registered in the
-    // ceremony state. The deal requires one payload per registered validator
-    // (single-validator and multi-validator cases are handled uniformly).
-    eprintln!("[E2E] Ceremony: dealing EA key...");
-    let ceremony_validators = get_ceremony_validators()
-        .expect("failed to query ceremony validators for deal");
-
-    eprintln!(
-        "[E2E] Ceremony: dealing to {} validator(s)",
-        ceremony_validators.len()
-    );
-
-    let dealer_payloads: Vec<DealerPayloadInput> = ceremony_validators
-        .iter()
-        .map(|(addr, pk_bytes)| {
-            let pk_arr: [u8; 32] = pk_bytes
-                .as_slice()
-                .try_into()
-                .expect("pallas pk must be 32 bytes");
-            let recipient_pk =
-                Option::<pallas::Point>::from(pallas::Point::from_bytes(&pk_arr))
-                    .unwrap_or_else(|| panic!("invalid Pallas PK for {}", addr));
-            let envelope = ecies::encrypt(&recipient_pk, ea_sk_bytes, &mut rng);
-            DealerPayloadInput {
-                validator_address: addr.clone(),
-                ephemeral_pk: envelope.ephemeral_pk.to_vec(),
-                ciphertext: envelope.ciphertext.clone(),
+    eprintln!("[E2E] Ensuring Pallas key registered for {}...", validator_addr);
+    let mut msg = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
+    msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
+    match broadcast_cosmos_msg(&msg, &config) {
+        Ok((status, json)) => {
+            let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+            if status == 200 && code == 0 {
+                eprintln!("[E2E] Pallas key registered ✓");
+                // Wait one block for state to commit.
+                std::thread::sleep(std::time::Duration::from_millis(6000));
+            } else {
+                eprintln!("[E2E] Pallas key already registered (code={}), continuing", code);
             }
-        })
-        .collect();
-
-    let body = deal_ea_key_payload(&validator_addr, ea_pk_bytes, &dealer_payloads);
-    let mut msg = body;
-    msg["@type"] = serde_json::json!("/zvote.v1.MsgDealExecutiveAuthorityKey");
-    let (status, json) =
-        broadcast_cosmos_msg(&msg, &config).expect("broadcast deal-ea-key");  
-    assert!(
-        status == 200
-            && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-        "deal-ea-key failed: HTTP {}, body={:?}",
-        status,
-        json
-    );
-
-    // Step 3: Wait for CONFIRMED status.
-    // Acking is handled in-protocol via PrepareProposal (auto-ack). With
-    // round-robin proposer selection the ack lands within a few blocks after
-    // the deal tx commits.
-    eprintln!("[E2E] Ceremony: waiting for auto-ack → CONFIRMED...");
-    wait_for_ceremony_confirmed(60_000).expect("ceremony should reach CONFIRMED via auto-ack");
-    eprintln!("[E2E] Ceremony: CONFIRMED ✓");
-}
-
-/// Load the EA keypair from disk (paths from env vars or defaults).
-///
-/// Returns `(ea_sk_bytes, ea_pk_bytes)` as 32-byte arrays.
-pub fn load_ea_keypair() -> ([u8; 32], [u8; 32]) {
-    let home = std::env::var("HOME").expect("HOME env var must be set");
-
-    let ea_pk_path = std::env::var("ZALLY_EA_PK_PATH")
-        .unwrap_or_else(|_| format!("{}/.zallyd/ea.pk", home));
-    let ea_sk_path = std::env::var("ZALLY_EA_SK_PATH")
-        .unwrap_or_else(|_| format!("{}/.zallyd/ea.sk", home));
-
-    let ea_pk_bytes: [u8; 32] = std::fs::read(&ea_pk_path)
-        .unwrap_or_else(|e| panic!("failed to read EA PK from {}: {}", ea_pk_path, e))
-        .try_into()
-        .expect("EA PK must be exactly 32 bytes");
-
-    let ea_sk_bytes: [u8; 32] = std::fs::read(&ea_sk_path)
-        .unwrap_or_else(|e| panic!("failed to read EA SK from {}: {}", ea_sk_path, e))
-        .try_into()
-        .expect("EA SK must be exactly 32 bytes");
-
-    (ea_sk_bytes, ea_pk_bytes)
+        }
+        Err(e) => eprintln!("[E2E] Pallas key registration failed: {} (may be already registered)", e),
+    }
 }

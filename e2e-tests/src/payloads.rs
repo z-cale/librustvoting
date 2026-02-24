@@ -229,38 +229,8 @@ pub fn register_pallas_key_payload(creator: &str, pallas_pk: &[u8]) -> Value {
     })
 }
 
-/// Dealer payload for MsgDealExecutiveAuthorityKey.
-pub struct DealerPayloadInput {
-    pub validator_address: String,
-    pub ephemeral_pk: Vec<u8>,
-    pub ciphertext: Vec<u8>,
-}
-
-/// Build MsgDealExecutiveAuthorityKey JSON body.
-pub fn deal_ea_key_payload(creator: &str, ea_pk: &[u8], payloads: &[DealerPayloadInput]) -> Value {
-    let payloads_json: Vec<Value> = payloads
-        .iter()
-        .map(|p| {
-            json!({
-                "validator_address": p.validator_address,
-                "ephemeral_pk": to_base64(&p.ephemeral_pk),
-                "ciphertext": to_base64(&p.ciphertext),
-            })
-        })
-        .collect();
-    json!({
-        "creator": creator,
-        "ea_pk": to_base64(ea_pk),
-        "payloads": payloads_json,
-    })
-}
-
-/// Build MsgReInitializeElectionAuthority JSON body.
-pub fn reinitialize_ea_payload(creator: &str) -> Value {
-    json!({
-        "creator": creator,
-    })
-}
+// DealerPayloadInput and deal_ea_key_payload removed: dealing is now automatic
+// via PrepareProposal (auto-deal). MsgReInitializeElectionAuthority also removed.
 
 /// Build MsgSetVoteManager JSON body.
 pub fn set_vote_manager_payload(creator: &str, new_manager: &str) -> Value {

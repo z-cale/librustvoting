@@ -10,7 +10,7 @@
 //! Prerequisites:
 //!   - Local zallyd chain running (port 1318)
 //!   - `grpcurl` installed (brew install grpcurl)
-//!   - EA ceremony already CONFIRMED on the chain
+//!   - Validator Pallas key registered (done during chain init)
 //!   - IMT server reachable (default: http://46.101.255.48:3000)
 //!
 //! Environment variables:
@@ -217,11 +217,8 @@ fn to_base64(bytes: &[u8]) -> String {
 #[test]
 #[ignore = "requires running chain + grpcurl + IMT server"]
 fn create_round_for_zashi() {
-    // ---- Step 0: Ensure ceremony is CONFIRMED ----
-    log("checking ceremony status...");
-    let (ea_sk_bytes, ea_pk_bytes) = e2e_tests::setup::load_ea_keypair();
-    e2e_tests::setup::bootstrap_ceremony(&ea_sk_bytes, &ea_pk_bytes);
-    log("ceremony CONFIRMED ✓");
+    // ---- Step 0: Ensure Pallas key registered ----
+    e2e_tests::setup::ensure_pallas_key_registered();
 
     // ---- Step 1: Import vote manager key ----
     log("importing vote manager key...");

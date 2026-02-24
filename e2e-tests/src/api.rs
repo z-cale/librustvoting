@@ -162,6 +162,7 @@ pub const SESSION_STATUS_UNSPECIFIED: i64 = 0;
 pub const SESSION_STATUS_ACTIVE: i64 = 1;
 pub const SESSION_STATUS_TALLYING: i64 = 2;
 pub const SESSION_STATUS_FINALIZED: i64 = 3;
+pub const SESSION_STATUS_PENDING: i64 = 4;
 
 /// Ceremony status enum (protobuf int32, matching CeremonyStatus in types.proto).
 pub const CEREMONY_STATUS_UNSPECIFIED: i64 = 0;
@@ -793,6 +794,24 @@ pub fn broadcast_cosmos_msg_with_retries(
         }
     }
     Err(last_err.unwrap())
+}
+
+/// Returns the EA public key (base64-decoded) from a round query.
+/// Returns None if the round doesn't exist, has no ea_pk, or ea_pk is empty.
+pub fn get_round_ea_pk(round_id_hex: &str) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine;
+
+    let path = format!("/zally/v1/round/{}", round_id_hex);
+    let (status, json) = get_json(&path).ok()?;
+    if status != 200 {
+        return None;
+    }
+    let ea_pk_b64 = json.get("round")?.get("ea_pk")?.as_str()?;
+    if ea_pk_b64.is_empty() {
+        return None;
+    }
+    B64.decode(ea_pk_b64).ok()
 }
 
 /// Poll GET /zally/v1/round/{round_id_hex} until status equals expected or timeout.
