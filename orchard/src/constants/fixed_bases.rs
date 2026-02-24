@@ -220,3 +220,61 @@ impl FixedPoint<pallas::Affine> for ValueCommitV {
         value_commit_v::Z_SHORT.to_vec()
     }
 }
+
+#[cfg(all(test, feature = "circuit"))]
+mod tests {
+    use super::*;
+
+    /// Ensures that `OrchardBaseFieldBases::SpendAuthGBase` routes to the
+    /// correct generator and tables via the `FixedPoint` trait.  The U/Z data
+    /// is identical to `OrchardFixedBasesFull::SpendAuthG` (same generator,
+    /// same 85-window structure); this test makes the dispatch wiring explicit.
+    #[test]
+    fn spend_auth_g_base_field_routes_correctly() {
+        use halo2_gadgets::ecc::FixedPoint as _;
+
+        let full = OrchardFixedBasesFull::SpendAuthG;
+        let base = OrchardBaseFieldBases::SpendAuthGBase;
+
+        assert_eq!(
+            full.generator(),
+            base.generator(),
+            "SpendAuthGBase must share the SpendAuthG generator"
+        );
+        assert_eq!(
+            full.u(),
+            base.u(),
+            "SpendAuthGBase U tables must match SpendAuthG full-scalar U tables"
+        );
+        assert_eq!(
+            full.z(),
+            base.z(),
+            "SpendAuthGBase Z tables must match SpendAuthG full-scalar Z tables"
+        );
+    }
+
+    /// Ensures that `OrchardBaseFieldBases::NullifierK` still routes to the
+    /// NullifierK generator and tables (regression guard for the enum refactor).
+    #[test]
+    fn nullifier_k_base_field_routes_correctly() {
+        use halo2_gadgets::ecc::FixedPoint as _;
+
+        let base = OrchardBaseFieldBases::NullifierK;
+
+        assert_eq!(
+            base.generator(),
+            nullifier_k::generator(),
+            "OrchardBaseFieldBases::NullifierK must use the NullifierK generator"
+        );
+        assert_eq!(
+            base.u(),
+            nullifier_k::U.to_vec(),
+            "OrchardBaseFieldBases::NullifierK U tables must match"
+        );
+        assert_eq!(
+            base.z(),
+            nullifier_k::Z.to_vec(),
+            "OrchardBaseFieldBases::NullifierK Z tables must match"
+        );
+    }
+}
