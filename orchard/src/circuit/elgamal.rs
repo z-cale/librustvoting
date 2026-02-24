@@ -131,9 +131,7 @@ pub(in crate::circuit) fn prove_elgamal_encryptions(
         layouter.namespace(|| alloc::format!("{namespace} ea_pk witness")),
         ea_pk,
     )?;
-    // Pin the witness directly to the public-input column. This replaces the
-    // previous assign_advice_from_instance + constrain_equal pattern that
-    // required the caller to pre-allocate two separate AssignedCells.
+    // Pin the witness directly to the public-input column.
     layouter.constrain_instance(
         ea_pk_point.inner().x().cell(),
         ea_pk_loc.instance,
