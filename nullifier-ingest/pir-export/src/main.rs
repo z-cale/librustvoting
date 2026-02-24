@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use pasta_curves::Fp;
 use rayon::prelude::*;
 
@@ -64,6 +64,12 @@ fn main() -> Result<()> {
     eprintln!("Sorting and building gap ranges...");
     let t1 = Instant::now();
     nfs.sort();
+    // Inject sentinels at k * 2^250 for k=0..16 (required by circuit gap-width constraint)
+    let step = Fp::from(2u64).pow([250, 0, 0, 0]);
+    let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+    nfs.extend(sentinels);
+    nfs.sort();
+    nfs.dedup();
     let ranges = build_nf_ranges(nfs);
     eprintln!(
         "  {} ranges built in {:.1}s",

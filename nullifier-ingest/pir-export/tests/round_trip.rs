@@ -39,7 +39,7 @@ fn construct_proof(
     root29: Fp,
 ) -> Option<ImtProofData> {
     let hasher = PoseidonHasher::new();
-    let tier0 = Tier0Data::from_bytes(tier0_data.to_vec());
+    let tier0 = Tier0Data::from_bytes(tier0_data.to_vec()).ok()?;
 
     let s1 = tier0.find_subtree(value)?;
 
@@ -243,7 +243,7 @@ fn test_tier0_binary_search() {
 
     let tier0_data =
         pir_export::tier0::export(&tree.root26, &tree.levels, &tree.ranges, &tree.empty_hashes);
-    let tier0 = Tier0Data::from_bytes(tier0_data);
+    let tier0 = Tier0Data::from_bytes(tier0_data).unwrap();
 
     // Test that values within ranges are found
     for &[low, _width] in ranges.iter().take(10) {

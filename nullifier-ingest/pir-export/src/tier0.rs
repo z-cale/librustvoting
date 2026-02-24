@@ -90,9 +90,14 @@ pub struct Tier0Data {
 }
 
 impl Tier0Data {
-    pub fn from_bytes(data: Vec<u8>) -> Self {
-        assert_eq!(data.len(), TIER0_BYTES);
-        Self { data }
+    pub fn from_bytes(data: Vec<u8>) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            data.len() == TIER0_BYTES,
+            "Tier 0 data size mismatch: got {} bytes, expected {}",
+            data.len(),
+            TIER0_BYTES
+        );
+        Ok(Self { data })
     }
 
     /// Root hash (depth 0).

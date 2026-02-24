@@ -83,7 +83,7 @@ impl PirClient {
             tier0_bytes.len(),
             t0.elapsed().as_secs_f64()
         );
-        let tier0 = Tier0Data::from_bytes(tier0_bytes.to_vec());
+        let tier0 = Tier0Data::from_bytes(tier0_bytes.to_vec())?;
 
         // Download YPIR parameters for both tiers
         let tier1_scenario: YpirScenario = http
@@ -109,7 +109,8 @@ impl PirClient {
         let root29_bytes = hex::decode(&root_info.root29)?;
         let mut root29_arr = [0u8; 32];
         root29_arr.copy_from_slice(&root29_bytes);
-        let root29 = Fp::from_repr(root29_arr).unwrap();
+        let root29 = Option::from(Fp::from_repr(root29_arr))
+            .ok_or_else(|| anyhow::anyhow!("invalid root29 field element"))?;
 
         let empty_hashes = precompute_empty_hashes();
 
@@ -261,6 +262,8 @@ impl PirClient {
             t2.elapsed().as_secs_f64() * 1000.0
         );
 
+        anyhow::ensure!(decoded.len() >= TIER1_ROW_BYTES,
+            "tier1 decoded response too short: {} bytes, expected >= {}", decoded.len(), TIER1_ROW_BYTES);
         Ok(decoded[..TIER1_ROW_BYTES].to_vec())
     }
 
@@ -325,6 +328,8 @@ impl PirClient {
             t2.elapsed().as_secs_f64() * 1000.0
         );
 
+        anyhow::ensure!(decoded.len() >= TIER2_ROW_BYTES,
+            "tier2 decoded response too short: {} bytes, expected >= {}", decoded.len(), TIER2_ROW_BYTES);
         Ok(decoded[..TIER2_ROW_BYTES].to_vec())
     }
 }
@@ -375,7 +380,7 @@ pub fn fetch_proof_local(
 ) -> Result<ImtProofData> {
     let mut path = [Fp::default(); TREE_DEPTH];
     let hasher = PoseidonHasher::new();
-    let tier0 = Tier0Data::from_bytes(tier0_data.to_vec());
+    let tier0 = Tier0Data::from_bytes(tier0_data.to_vec())?;
 
     // ── Tier 0: plaintext lookup ─────────────────────────────────────────
     let s1 = tier0

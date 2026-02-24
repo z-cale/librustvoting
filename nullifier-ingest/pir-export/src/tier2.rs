@@ -102,8 +102,10 @@ fn write_row(
             write_fp(&mut buf[offset..], width);
             offset += 32;
         } else {
-            // Empty padding leaf: key=0, value=0
-            write_fp(&mut buf[offset..], Fp::zero());
+            // Empty padding leaf: key=p-1 (max field element), value=0
+            // Using -Fp::one() ensures padding sorts after all real leaves,
+            // preventing binary search from landing on empty entries.
+            write_fp(&mut buf[offset..], -Fp::one());
             offset += 32;
             write_fp(&mut buf[offset..], Fp::zero());
             offset += 32;

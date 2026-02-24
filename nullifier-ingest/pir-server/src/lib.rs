@@ -6,6 +6,7 @@
 
 use std::io::Cursor;
 use std::time::Instant;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -141,13 +142,19 @@ impl<'a> TierServer<'a> {
     /// `[8 bytes: packed_query_row byte length as LE u64][packed_query_row bytes][pub_params bytes]`
     ///
     /// Returns the serialized response as LE u64 bytes.
-    pub fn answer_query(&mut self, query_bytes: &[u8]) -> Vec<u8> {
-        // Parse length-prefixed format: [8: pqr_byte_len][pqr][pub_params]
+    pub fn answer_query(&mut self, query_bytes: &[u8]) -> Result<Vec<u8>> {
+        // Validate length-prefixed format: [8: pqr_byte_len][pqr][pub_params]
+        anyhow::ensure!(query_bytes.len() >= 8, "query too short: {} bytes", query_bytes.len());
         let pqr_byte_len =
             u64::from_le_bytes(query_bytes[..8].try_into().unwrap()) as usize;
+        anyhow::ensure!(pqr_byte_len % 8 == 0, "pqr_byte_len {} not a multiple of 8", pqr_byte_len);
+        anyhow::ensure!(8 + pqr_byte_len <= query_bytes.len(),
+            "pqr_byte_len {} exceeds payload ({})", pqr_byte_len, query_bytes.len() - 8);
+        let remaining = query_bytes.len() - 8 - pqr_byte_len;
+        anyhow::ensure!(remaining % 8 == 0, "pub_params section {} bytes not a multiple of 8", remaining);
 
         let pqr_u64_len = pqr_byte_len / 8;
-        let pp_u64_len = (query_bytes.len() - 8 - pqr_byte_len) / 8;
+        let pp_u64_len = remaining / 8;
 
         // Copy into 64-byte aligned memory for AVX-512 operations.
         let mut pqr = Aligned64::new(pqr_u64_len);
@@ -161,12 +168,12 @@ impl<'a> TierServer<'a> {
         }
 
         // Run the YPIR online computation (returns Vec<u8> directly)
-        self.server.perform_online_computation_simplepir(
+        Ok(self.server.perform_online_computation_simplepir(
             pqr.as_slice(),
             &self.offline,
             &[pub_params.as_slice()],
             None,
-        )
+        ))
     }
 
     pub fn scenario(&self) -> &YpirScenario {

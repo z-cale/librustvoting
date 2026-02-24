@@ -163,13 +163,21 @@ async fn post_tier1_query(
     let t0 = Instant::now();
     eprintln!("Tier 1 query: received {} bytes", body.len());
     let mut server = state.tier1.lock().await;
-    let response = server.answer_query(&body);
-    eprintln!("Tier 1 query: answered in {:.1}ms, response {} bytes",
-        t0.elapsed().as_secs_f64() * 1000.0, response.len());
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-        response,
-    )
+    match server.answer_query(&body) {
+        Ok(response) => {
+            eprintln!("Tier 1 query: answered in {:.1}ms, response {} bytes",
+                t0.elapsed().as_secs_f64() * 1000.0, response.len());
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                response,
+            ).into_response()
+        }
+        Err(e) => {
+            eprintln!("Tier 1 query: malformed request: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
 }
 
 async fn post_tier2_query(
@@ -179,13 +187,21 @@ async fn post_tier2_query(
     let t0 = Instant::now();
     eprintln!("Tier 2 query: received {} bytes", body.len());
     let mut server = state.tier2.lock().await;
-    let response = server.answer_query(&body);
-    eprintln!("Tier 2 query: answered in {:.1}ms, response {} bytes",
-        t0.elapsed().as_secs_f64() * 1000.0, response.len());
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-        response,
-    )
+    match server.answer_query(&body) {
+        Ok(response) => {
+            eprintln!("Tier 2 query: answered in {:.1}ms, response {} bytes",
+                t0.elapsed().as_secs_f64() * 1000.0, response.len());
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                response,
+            ).into_response()
+        }
+        Err(e) => {
+            eprintln!("Tier 2 query: malformed request: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
 }
 
 async fn get_tier1_row(
