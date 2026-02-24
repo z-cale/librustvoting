@@ -24,7 +24,9 @@ struct Aligned64 {
 
 impl Aligned64 {
     fn new(len: usize) -> Self {
-        let layout = Layout::from_size_align(len * 8, 64).unwrap();
+        assert!(len > 0, "Aligned64::new called with zero length");
+        let size = len.checked_mul(8).expect("Aligned64 size overflow");
+        let layout = Layout::from_size_align(size, 64).expect("Aligned64 invalid layout");
         let ptr = unsafe { alloc_zeroed(layout) as *mut u64 };
         if ptr.is_null() {
             handle_alloc_error(layout);

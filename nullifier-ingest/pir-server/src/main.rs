@@ -38,10 +38,10 @@ async fn main() -> Result<()> {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./pir-data"));
-    let port: u16 = std::env::args()
-        .nth(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3001);
+    let port: u16 = match std::env::args().nth(2) {
+        Some(s) => s.parse().expect("invalid port number"),
+        None => 3001,
+    };
 
     let t_total = Instant::now();
 

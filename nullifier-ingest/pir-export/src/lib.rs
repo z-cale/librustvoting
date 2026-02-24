@@ -249,7 +249,7 @@ pub fn write_fp(buf: &mut [u8], fp: Fp) {
 pub(crate) fn read_fp(buf: &[u8]) -> Fp {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&buf[..32]);
-    Fp::from_repr(arr).unwrap()
+    Fp::from_repr(arr).expect("read_fp: non-canonical Fp (caller must validate first)")
 }
 
 /// Validate that a 32-byte slice is a canonical Fp encoding.

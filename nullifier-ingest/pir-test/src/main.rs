@@ -203,8 +203,8 @@ fn run_local_inner(raw_nfs: &[Fp], num_proofs: usize) -> Result<()> {
             // Pick a random populated range and a random value within it
             let idx = rng.gen_range(0..ranges.len());
             let [low, width] = ranges[idx];
-            // Pick a random offset within the range
-            let _low_u64 = u64::from_le_bytes(low.to_repr()[..8].try_into().unwrap());
+            // Pick a random offset within the range (truncated to u64 — large sentinel
+            // ranges degenerate to querying `low` directly, which is acceptable for testing).
             let width_u64 = u64::from_le_bytes(width.to_repr()[..8].try_into().unwrap());
             let offset_val = if width_u64 > 0 {
                 rng.gen_range(0..=width_u64.min(u64::MAX - 1))

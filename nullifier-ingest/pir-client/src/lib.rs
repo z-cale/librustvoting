@@ -97,12 +97,16 @@ impl PirClient {
             .get(format!("{base}/params/tier1"))
             .send()
             .await?
+            .error_for_status()
+            .context("GET /params/tier1 failed")?
             .json()
             .await?;
         let tier2_scenario: YpirScenario = http
             .get(format!("{base}/params/tier2"))
             .send()
             .await?
+            .error_for_status()
+            .context("GET /params/tier2 failed")?
             .json()
             .await?;
 
@@ -111,6 +115,8 @@ impl PirClient {
             .get(format!("{base}/root"))
             .send()
             .await?
+            .error_for_status()
+            .context("GET /root failed")?
             .json()
             .await?;
         anyhow::ensure!(root_info.pir_depth == PIR_DEPTH,
