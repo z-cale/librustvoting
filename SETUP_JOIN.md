@@ -1,72 +1,77 @@
 # Join the Zally Network as a Validator
 
-## Requirements
+There are two paths to join: **binary** (no repo needed) or **source** (for developers with the repo).
+
+## Path A — Binary (no repo, no mise)
+
+### Requirements
 
 - Linux or macOS (amd64 or arm64)
 - `curl` and `jq` installed
 - Funded validator account (see Step 2)
 
-## Step 1 — Run join.sh
-
-Run the setup script. It downloads pre-built binaries, fetches the genesis and network config, initialises your node, generates cryptographic keys, and produces a ready-to-run `start.sh`.
+### Step 1 — Run join.sh
 
 ```bash
 curl -fsSL https://vote.fra1.digitaloceanspaces.com/join.sh | bash
 ```
 
-You will be prompted for a **moniker** (a display name for your validator). To run non-interactively, set it as an env var:
+You will be prompted for a **moniker** (a display name for your validator). To run non-interactively:
 
 ```bash
 ZALLY_MONIKER=my-validator \
   curl -fsSL https://vote.fra1.digitaloceanspaces.com/join.sh | bash
 ```
 
-### Optional env vars
+#### Optional env vars
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ZALLY_MONIKER` | *(prompted)* | Validator display name |
-| `ZALLY_INSTALL_DIR` | `/usr/local/bin` | Where to install `zallyd` and `create-val-tx` |
+| `ZALLY_INSTALL_DIR` | `~/.local/bin` | Where to install `zallyd` and `create-val-tx` |
 | `ZALLY_HOME` | `~/.zallyd` | Node home directory |
 
-When `join.sh` finishes it prints your validator address:
+When `join.sh` finishes it prints your validator address. Save it for Step 2.
 
-```
-  Address:  zally1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-Save this — you need it for Step 2.
-
-## Step 2 — Fund your account
+### Step 2 — Fund your account
 
 Your account must hold stake before it can register as a validator. Ask a teammate to trigger the **"Fund validator"** GitHub Action with your address from Step 1.
 
-You can confirm the funds arrived once the node is synced (Step 3):
-
-```bash
-zallyd query bank balances <your-address> --node tcp://localhost:26657
-```
-
-## Step 3 — Start the node
-
-`join.sh` generated a `start.sh` in your home directory. Run it:
+### Step 3 — Start the node
 
 ```bash
 ~/.zallyd/start.sh
 ```
 
-This will:
-1. Start `zallyd` in the background, logging to `~/.zallyd/node.log`
-2. Poll sync status and print block height until the node is caught up
-3. Automatically call `create-val-tx` to register you as a validator once synced
+This starts zallyd, waits for sync, and registers you as a validator automatically.
 
-To follow logs while the node is running (in a separate terminal):
+---
+
+## Path B — Source (has repo, uses mise)
+
+### Step 1 — Build and join
 
 ```bash
-tail -f ~/.zallyd/node.log
+cd zally
+mise install              # pin Go/Rust/Node versions
+mise run validator:join    # builds from source, downloads genesis, generates start.sh
 ```
 
-## Step 4 — Verify
+This runs `join-dev.sh` which builds `zallyd` + `create-val-tx` from source, fetches the genesis and network config, and produces `~/.zallyd/start.sh`.
+
+### Step 2 — Fund your account
+
+Same as Path A — trigger the **"Fund validator"** GitHub Action with your address.
+
+### Step 3 — Start the node
+
+```bash
+~/.zallyd/start.sh
+```
+
+---
+
+## Verify
 
 Once `start.sh` reports "Validator registered", confirm you appear in the validator set:
 
@@ -76,9 +81,15 @@ zallyd query staking validators --node tcp://localhost:26657
 
 ## Ceremony Participation
 
-The EA key ceremony is automatic. When a new voting round is created, your validator is included in the ceremony if it is bonded and has a registered Pallas key (done automatically by `join.sh`). The block proposer handles dealing and acking via `PrepareProposal` — no manual steps required.
+The EA key ceremony is automatic. When a new voting round is created, your validator is included in the ceremony if it is bonded and has a registered Pallas key (done automatically by `join.sh` / `join-dev.sh`). The block proposer handles dealing and acking via `PrepareProposal` — no manual steps required.
 
-If your validator fails to ack in 3 consecutive ceremonies, it will be jailed. Check status with `./ceremony.sh status`.
+If your validator fails to ack in 3 consecutive ceremonies, it will be jailed. Check status:
+
+```bash
+mise status
+# or
+curl -s localhost:1318/zally/v1/rounds | jq
+```
 
 ## Useful commands
 
@@ -103,5 +114,5 @@ pkill zallyd
 | Chain ID | `zvote-1` |
 | P2P port | `26656` |
 | RPC port | `26657` (localhost only) |
-| REST API port | `1317` (localhost only) |
+| REST API port | `1318` (localhost only) |
 | Node home | `~/.zallyd` |
