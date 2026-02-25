@@ -74,7 +74,7 @@ ZALLY_API_URL=https://custom-domain.com ./scripts/remote-ceremony.sh zally
 ### How it works
 
 The script fetches `ea.sk`, `ea.pk`, and `pallas.pk` from the server via SCP
-(cached locally for reruns), then runs the `ceremony_bootstrap` e2e test with:
+(cached locally for reruns), then runs the `round_activation` e2e test with:
 
 - REST queries (register Pallas key, deal EA key, poll status) hit the public HTTPS URL from your local machine
 - Transaction signing and broadcasting execute on the remote via SSH (`/opt/zally-chain/zallyd`)

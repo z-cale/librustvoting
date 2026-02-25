@@ -205,6 +205,10 @@ jobs:
           echo "Helper server failed to start"
           cat chain.log | tail -50
           exit 1
+      - name: Run E2E test (round_activation)
+        run: cargo test --release --manifest-path ../e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1318
       - name: Run E2E test (voting_flow_librustvoting)
         run: cargo test --release --manifest-path ../e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
         env:
