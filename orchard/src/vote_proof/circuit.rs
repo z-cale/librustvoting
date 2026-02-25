@@ -117,7 +117,7 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 /// 315 rows (3,827 → 3,512 measured). Run the `row_budget` benchmark to
 /// re-measure after circuit changes:
 ///   `cargo test --features vote-proof row_budget -- --nocapture --ignored`
-pub const K: u32 = 14;
+pub const K: u32 = 13;
 
 pub use van_integrity::DOMAIN_VAN;
 
@@ -3132,15 +3132,20 @@ mod tests {
         // ---------------------------------------------------------------
         for probe_k in 11u32..=K {
             let (c, inst) = make_test_data();
-            let p = MockProver::run(probe_k, &c, vec![inst.to_halo2_instance()]).unwrap();
-            match p.verify() {
-                Ok(()) => {
-                    println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
-                        1usize << probe_k,
-                        100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
-                    break;
+            match MockProver::run(probe_k, &c, vec![inst.to_halo2_instance()]) {
+                Err(_) => {
+                    println!("  K={probe_k}: not enough rows (synthesizer rejected)");
+                    continue;
                 }
-                Err(_) => println!("  K={probe_k}: too small"),
+                Ok(p) => match p.verify() {
+                    Ok(()) => {
+                        println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
+                            1usize << probe_k,
+                            100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
+                        break;
+                    }
+                    Err(_) => println!("  K={probe_k}: too small"),
+                },
             }
         }
     }
