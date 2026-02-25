@@ -17,12 +17,13 @@ _.path = ["{{env.HOME}}/go/bin", "/usr/local/go/bin"]
 
 [tasks.start]
 description = "Init chain + bootstrap nullifiers + start everything"
+quiet = true
 run = '''
 #!/usr/bin/env bash
 set -e
 PROCS=""
-pgrep zallyd    > /dev/null 2>&1 && PROCS="$PROCS zallyd"
-pgrep nf-server > /dev/null 2>&1 && PROCS="$PROCS nf-server"
+pgrep zallyd                   > /dev/null 2>&1 && PROCS="$PROCS zallyd"
+pgrep -f 'nf-server.*serve'   > /dev/null 2>&1 && PROCS="$PROCS nf-server"
 if [ -n "$PROCS" ]; then
     printf '\033[33mAlready running:%s\033[0m\n' "$PROCS"
     exit 0
@@ -38,6 +39,7 @@ printf '\033[32mStarted: nf-server → nf-serve.log | zallyd → zallyd.log\033[
 
 [tasks.stop]
 description = "Stop all services"
+quiet = true
 run = '''
 #!/usr/bin/env bash
 KILLED=""
@@ -52,6 +54,7 @@ fi
 
 [tasks.status]
 description = "Show status of all services + round state"
+quiet = true
 run = '''
 #!/usr/bin/env bash
 API="http://localhost:1318"
@@ -84,8 +87,10 @@ else
 fi
 
 printf "nf-server      "
-if pgrep -x nf-server > /dev/null 2>&1; then
+if pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
     printf '\033[32m● running\033[0m   port 3000\n'
+elif pgrep -f 'cargo.*nf-server' > /dev/null 2>&1; then
+    printf '\033[33m● building\033[0m  (cargo compile in progress)\n'
 else
     printf '\033[31m○ stopped\033[0m\n'
 fi
