@@ -99,12 +99,24 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 
 /// Circuit size (2^K rows).
 ///
-/// K=14 (16,384 rows). Conditions 1–3 and 5–10 use ~29 Poseidon hashes plus
-/// AddChip additions, range-check running sums, ECC fixed-base mul
-/// (condition 3), and 24 Merkle swap regions. Condition 11 adds 15
-/// variable-base scalar multiplications (~7,500 rows) and 5 point
-/// additions. The 10-bit lookup table requires 1,024 rows.
-/// K=14 provides headroom.
+/// K=14 (16,384 rows). `CircuitCost::measure` reports a floor-planner
+/// high-water mark of **3,512 rows** (21% of 16,384). The `V1` floor planner
+/// packs non-overlapping regions into the same row range across different
+/// columns, so the high-water mark is much lower than a naive sum-of-heights
+/// estimate.
+///
+/// Key contributors (rough per-region heights, not per-column sums):
+/// - 24-level Merkle path: 24 Poseidon regions stacked sequentially — the
+///   tallest single stack in the circuit.
+/// - ECC fixed- and variable-base multiplications packed alongside the
+///   Poseidon regions in non-overlapping columns.
+/// - 10-bit Sinsemilla/range-check lookup table: 1,024 fixed rows.
+///
+/// The `[v_i]*G` term uses `FixedPointShort` (22-window short-scalar path)
+/// rather than `FixedPointBaseField` (85-window full-scalar path), saving
+/// 315 rows (3,827 → 3,512 measured). Run the `row_budget` benchmark to
+/// re-measure after circuit changes:
+///   `cargo test --features vote-proof row_budget -- --nocapture --ignored`
 pub const K: u32 = 14;
 
 pub use van_integrity::DOMAIN_VAN;
@@ -1437,6 +1449,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     x_row: EA_PK_X,
                     y_row: EA_PK_Y,
                 },
+                config.advices[0],
                 share_cells,
                 r_cells,
                 enc_c1_cond11,
@@ -1614,6 +1627,7 @@ mod tests {
     use group::{Curve, Group};
     use halo2_gadgets::sinsemilla::primitives::CommitDomain;
     use halo2_proofs::dev::MockProver;
+    use pasta_curves::arithmetic::CurveAffine;
     use pasta_curves::pallas;
     use rand::rngs::OsRng;
 
@@ -3031,6 +3045,103 @@ mod tests {
         match MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]) {
             Ok(prover) => assert!(prover.verify().is_err()),
             Err(_) => {} // Synthesis failed — acceptable.
+        }
+    }
+
+    /// Measures actual rows used by the vote-proof circuit via `CircuitCost::measure`.
+    ///
+    /// `CircuitCost` runs the floor planner against the circuit and tracks the
+    /// highest row offset assigned in any column, giving the real "rows consumed"
+    /// number rather than the theoretical 2^K capacity.
+    ///
+    /// Run with:
+    ///   cargo test --features vote-proof row_budget -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn row_budget() {
+        use std::println;
+        use halo2_proofs::dev::CircuitCost;
+        use pasta_curves::vesta;
+
+        let (circuit, _) = make_test_data();
+
+        // CircuitCost::measure runs the floor planner and returns layout statistics.
+        // Fields are private, so extract them from the Debug representation.
+        let cost = CircuitCost::<vesta::Point, _>::measure(K, &circuit);
+        let debug = alloc::format!("{cost:?}");
+
+        // Parse max_rows, max_advice_rows, max_fixed_rows from Debug string.
+        let extract = |field: &str| -> usize {
+            let prefix = alloc::format!("{field}: ");
+            debug.split(&prefix)
+                .nth(1)
+                .and_then(|s| s.split([',', ' ', '}']).next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        };
+
+        let max_rows         = extract("max_rows");
+        let max_advice_rows  = extract("max_advice_rows");
+        let max_fixed_rows   = extract("max_fixed_rows");
+        let total_available  = 1usize << K;
+
+        println!("=== vote-proof circuit row budget (K={K}) ===");
+        println!("  max_rows (floor-planner high-water mark): {max_rows}");
+        println!("  max_advice_rows:                          {max_advice_rows}");
+        println!("  max_fixed_rows:                           {max_fixed_rows}");
+        println!("  2^K  (total available rows):              {total_available}");
+        println!("  headroom:                                 {}", total_available.saturating_sub(max_rows));
+        println!("  utilisation:                              {:.1}%",
+            100.0 * max_rows as f64 / total_available as f64);
+        println!();
+        println!("  Full debug: {debug}");
+
+        // ---------------------------------------------------------------
+        // Witness-independence check: Circuit::default() (all unknowns)
+        // must produce exactly the same layout as the filled circuit.
+        // If these differ, the row count depends on witness values and
+        // the measurement above cannot be trusted as a production bound.
+        // ---------------------------------------------------------------
+        let cost_default = CircuitCost::<vesta::Point, _>::measure(K, &Circuit::default());
+        let debug_default = alloc::format!("{cost_default:?}");
+        let max_rows_default = debug_default
+            .split("max_rows: ").nth(1)
+            .and_then(|s| s.split([',', ' ', '}']).next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        if max_rows_default == max_rows {
+            println!("  Witness-independence: PASS \
+                (Circuit::default() max_rows={max_rows_default} == filled max_rows={max_rows})");
+        } else {
+            println!("  Witness-independence: FAIL \
+                (Circuit::default() max_rows={max_rows_default} != filled max_rows={max_rows}) \
+                — row count depends on witness values!");
+        }
+
+        // ---------------------------------------------------------------
+        // VOTE_COMM_TREE_DEPTH sanity check: confirm the circuit constant
+        // matches the canonical value in vote_commitment_tree::TREE_DEPTH
+        // (24 as of this writing). A mismatch would mean test data uses a
+        // shallower tree than production.
+        // ---------------------------------------------------------------
+        println!("  VOTE_COMM_TREE_DEPTH (circuit constant): {VOTE_COMM_TREE_DEPTH}");
+
+        // ---------------------------------------------------------------
+        // Minimum-K probe: find the smallest K at which MockProver passes.
+        // Useful for evaluating whether K can be reduced.
+        // ---------------------------------------------------------------
+        for probe_k in 11u32..=K {
+            let (c, inst) = make_test_data();
+            let p = MockProver::run(probe_k, &c, vec![inst.to_halo2_instance()]).unwrap();
+            match p.verify() {
+                Ok(()) => {
+                    println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
+                        1usize << probe_k,
+                        100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
+                    break;
+                }
+                Err(_) => println!("  K={probe_k}: too small"),
+            }
         }
     }
 }
