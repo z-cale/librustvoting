@@ -4,7 +4,7 @@ HOME_DIR = $(HOME)/.zallyd
 export GOBIN := $(HOME)/go/bin
 export PATH := $(GOBIN):$(PATH)
 
-.PHONY: install install-ffi init start clean build build-ffi fmt lint test test-unit test-integration test-helper ceremony test-api test-api-restart test-api-reinit test-e2e test-ceremony-e2e fixtures-ts circuits fixtures test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi init-multi stop-multi status-multi clean-multi caddy
+.PHONY: install install-ffi init start clean build build-ffi fmt lint test test-unit test-integration test-helper ceremony test-api test-api-restart test-api-reinit test-e2e test-ceremony-e2e fixtures-ts circuits fixtures test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi caddy
 
 ## install: Build and install the zallyd binary to $GOPATH/bin
 install:
@@ -35,62 +35,6 @@ clean:
 	rm -rf $(HOME_DIR)
 	rm -f $(BINARY)
 
-## init-multi: Initialize a 3-validator chain on localhost (wipes existing data)
-init-multi: install
-	bash scripts/init_multi.sh
-
-## stop-multi: Stop all multi-validator processes
-stop-multi:
-	@if [ -f $(HOME)/.zallyd-multi-pids ]; then \
-		echo "Stopping validators..."; \
-		while read pid; do \
-			kill "$$pid" 2>/dev/null && echo "  Killed PID $$pid" || echo "  PID $$pid already stopped"; \
-		done < $(HOME)/.zallyd-multi-pids; \
-		rm -f $(HOME)/.zallyd-multi-pids; \
-	else \
-		echo "No PID file found at $(HOME)/.zallyd-multi-pids"; \
-	fi
-
-## status-multi: Show running status of all 3 validators (process + RPC health)
-status-multi:
-	@echo "=== Multi-Validator Status ==="
-	@for i in 1 2 3; do \
-		home="$(HOME)/.zallyd-val$$i"; \
-		rpc_port=$$((26057 + $$i * 100)); \
-		api_port=$$((1318 + $$i * 100)); \
-		echo ""; \
-		echo "--- Validator $$i (home: $$home) ---"; \
-		proc=$$(pgrep -f "zallyd start --home .*val$$i$$" 2>/dev/null | head -1); \
-		if [ -n "$$proc" ]; then \
-			echo "  Process : RUNNING (PID $$proc)"; \
-		else \
-			echo "  Process : STOPPED"; \
-		fi; \
-		rpc_resp=$$(curl -sf --max-time 2 "http://127.0.0.1:$$rpc_port/status" 2>/dev/null); \
-		if [ -n "$$rpc_resp" ]; then \
-			latest=$$(echo "$$rpc_resp" | grep -o '"latest_block_height":"[^"]*"' | head -1 | cut -d'"' -f4); \
-			moniker=$$(echo "$$rpc_resp" | grep -o '"moniker":"[^"]*"' | head -1 | cut -d'"' -f4); \
-			catching=$$(echo "$$rpc_resp" | grep -o '"catching_up":[a-z]*' | cut -d':' -f2); \
-			echo "  RPC     : UP (port $$rpc_port)"; \
-			echo "  Moniker : $$moniker"; \
-			echo "  Block   : $$latest"; \
-			echo "  Syncing : $$catching"; \
-		else \
-			echo "  RPC     : UNREACHABLE (port $$rpc_port)"; \
-		fi; \
-		api_resp=$$(curl -sf --max-time 2 "http://127.0.0.1:$$api_port/cosmos/base/tendermint/v1beta1/syncing" 2>/dev/null); \
-		if [ -n "$$api_resp" ]; then \
-			echo "  REST API: UP (port $$api_port)"; \
-		else \
-			echo "  REST API: UNREACHABLE (port $$api_port)"; \
-		fi; \
-	done
-	@echo ""
-
-## clean-multi: Remove all multi-validator data directories
-clean-multi: stop-multi
-	rm -rf $(HOME)/.zallyd-val1 $(HOME)/.zallyd-val2 $(HOME)/.zallyd-val3
-
 ## fmt: Format Go code
 fmt:
 	go fmt ./...
@@ -114,20 +58,16 @@ test-helper:
 ## test: Run all tests (Go only, no Rust dependency)
 test: test-unit test-integration test-helper
 
-## ceremony: Bootstrap the EA key ceremony on a running chain (requires: make init && make start)
+## ceremony: Register Pallas key + create round + wait for ACTIVE (per-round auto-ceremony)
 ceremony:
 	ZALLY_API_URL=http://localhost:1318 cargo test --release --manifest-path ../e2e-tests/Cargo.toml ceremony_bootstrap -- --nocapture --ignored
 
 ## test-api: Rust E2E API tests against a running chain (requires: make init && make start)
 test-api:
-	ZALLY_API_URL=http://localhost:1318 ZALLY_EA_PK_PATH=$(HOME)/.zallyd/ea.pk HELPER_SERVER_URL=http://127.0.0.1:1318 cargo test --release --manifest-path ../e2e-tests/Cargo.toml -- --nocapture --ignored --skip ceremony_lifecycle_multi_validator
+	ZALLY_API_URL=http://localhost:1318 HELPER_SERVER_URL=http://127.0.0.1:1318 cargo test --release --manifest-path ../e2e-tests/Cargo.toml -- --nocapture --ignored
 
 ## test-e2e: Alias for test-api (Rust E2E tests)
 test-e2e: test-api
-
-## test-ceremony-e2e: Rust E2E ceremony lifecycle test against a running 3-validator chain (requires: make init-multi)
-test-ceremony-e2e:
-	ZALLY_API_URL=http://localhost:1418 cargo test --release --manifest-path ../e2e-tests/Cargo.toml ceremony_lifecycle_multi_validator -- --nocapture --ignored
 
 ## test-api-restart: init + test-api (full API test cycle; chain must be stopped first)
 test-api-restart: init test-api

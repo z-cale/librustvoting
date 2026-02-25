@@ -1,2 +1,564 @@
+# https://mise.jdx.dev
+# Install: curl https://mise.run | sh
+# Then: mise install && mise start
+
 [tools]
-go = "1.23"
+go = "1.24.1"
+rust = "stable"
+node = "22"
+buf = "latest"
+jq = "latest"
+
+[env]
+GOBIN = "{{env.HOME}}/go/bin"
+_.path = ["{{env.HOME}}/go/bin", "/usr/local/go/bin"]
+
+# ── Top-level shortcuts (daily use) ─────────────────────────────────
+
+[tasks.start]
+description = "Init chain + bootstrap nullifiers + start everything"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -e
+PROCS=""
+pgrep zallyd                   > /dev/null 2>&1 && PROCS="$PROCS zallyd"
+pgrep -f 'nf-server.*serve'   > /dev/null 2>&1 && PROCS="$PROCS nf-server"
+if [ -n "$PROCS" ]; then
+    printf '\033[33mAlready running:%s\033[0m\n' "$PROCS"
+    exit 0
+fi
+make -C sdk init
+make -C nullifier-ingest bootstrap
+make -C nullifier-ingest ingest
+make -C nullifier-ingest export-nf
+nohup make -C nullifier-ingest serve > nf-serve.log 2>&1 &
+ZALLY_PIR_URL=http://localhost:3000 nohup make -C sdk start > zallyd.log 2>&1 &
+printf '\033[32mStarted: nf-server → nf-serve.log | zallyd → zallyd.log\033[0m\n'
+
+# Wait for chain to accept transactions, then register the genesis validator's
+# Pallas key so per-round ceremony can proceed when a round is published.
+printf 'Waiting for chain to be ready...'
+for i in $(seq 1 30); do
+    if zallyd status --home ~/.zallyd 2>/dev/null | grep -q latest_block_height; then
+        printf ' \033[32mready\033[0m\n'
+        break
+    fi
+    printf '.'
+    sleep 2
+done
+zallyd tx vote register-pallas-key \
+    --from validator --chain-id zvote-1 --keyring-backend test \
+    --home ~/.zallyd -y > /dev/null 2>&1 \
+    && printf '\033[32mPallas key registered ✓\033[0m\n' \
+    || printf '\033[33mPallas key already registered (or registration skipped)\033[0m\n'
+'''
+
+[tasks.stop]
+description = "Stop all services"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+KILLED=""
+pkill zallyd    2>/dev/null && KILLED="$KILLED zallyd"    || true
+pkill nf-server 2>/dev/null && KILLED="$KILLED nf-server" || true
+if [ -n "$KILLED" ]; then
+    printf '\033[32mStopped:%s\033[0m\n' "$KILLED"
+else
+    echo "No running processes found."
+fi
+'''
+
+[tasks.status]
+description = "Show status of all services + round state"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+
+# ── Detect mode: multi-validator vs single ───────────────────────
+
+MULTI=false
+API="http://localhost:1318"
+CHAIN_UP=false
+
+if pgrep -f 'zallyd start --home.*val' > /dev/null 2>&1; then
+    MULTI=true
+fi
+
+format_chain_status() {
+    python3 -c "
+import sys,json,time,datetime
+d=json.load(sys.stdin); s=d.get('sync_info',{})
+h=s.get('latest_block_height','?')
+t=s.get('latest_block_time','')
+age=''
+if t:
+    dt=datetime.datetime.fromisoformat(t.replace('Z','+00:00'))
+    secs=int(time.time()-dt.timestamp())
+    if secs<60: age=f'{secs}s ago'
+    elif secs<3600: age=f'{secs//60}m ago'
+    else: age=f'{secs//3600}h ago'
+syncing=' (syncing)' if s.get('catching_up') else ''
+print(f'block {h}  {age}{syncing}')
+"
+}
+
+# ── Chain ─────────────────────────────────────────────────────────
+
+if [ "$MULTI" = true ]; then
+    printf '\033[2m(multi-validator mode)\033[0m\n'
+    API="http://localhost:1418"
+    for i in 1 2 3; do
+        home="$HOME/.zallyd-val$i"
+        rpc_port=$((26057 + i * 100))
+        api_port=$((1318 + i * 100))
+        printf "  val%-11s" "$i"
+        STATUS=$(zallyd status --home "$home" --node "tcp://127.0.0.1:$rpc_port" 2>/dev/null) || true
+        if [ -n "$STATUS" ]; then
+            [ "$CHAIN_UP" = false ] && CHAIN_UP=true
+            INFO=$(echo "$STATUS" | format_chain_status)
+            printf '\033[32m● running\033[0m   %s  (:%s)\n' "$INFO" "$api_port"
+        else
+            printf '\033[31m○ stopped\033[0m\n'
+        fi
+    done
+else
+    printf "chain          "
+    STATUS=$(zallyd status --home ~/.zallyd 2>/dev/null) || true
+    if [ -n "$STATUS" ]; then
+        CHAIN_UP=true
+        INFO=$(echo "$STATUS" | format_chain_status)
+        printf '\033[32m● running\033[0m   %s\n' "$INFO"
+    else
+        printf '\033[31m○ stopped\033[0m\n'
+    fi
+fi
+
+# ── nf-server ────────────────────────────────────────────────────
+
+printf "nf-server      "
+if pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
+    printf '\033[32m● running\033[0m   port 3000\n'
+elif pgrep -f 'cargo.*nf-server' > /dev/null 2>&1; then
+    printf '\033[33m● building\033[0m  (cargo compile in progress)\n'
+else
+    printf '\033[31m○ stopped\033[0m\n'
+fi
+
+# ── Nullifier data ───────────────────────────────────────────────
+
+printf "nullifiers     "
+CP="nullifier-ingest/nullifiers.checkpoint"
+if [ -f "$CP" ]; then
+    HEIGHT=$(od -An -t u8 -j 0 -N 8 "$CP" | tr -d ' ')
+    BYTES=$(wc -c < "nullifier-ingest/nullifiers.bin" 2>/dev/null | tr -d ' ')
+    COUNT=$((BYTES / 32))
+    printf '\033[32m✓ synced\033[0m    height %s  %sM nullifiers\n' "$HEIGHT" "$((COUNT / 1000000))"
+else
+    printf '\033[31m✗ no data\033[0m   run: mise start\n'
+fi
+
+printf "pir-data       "
+if [ -f "nullifier-ingest/pir-data/tier0.bin" ]; then
+    printf '\033[32m✓ exported\033[0m\n'
+else
+    printf '\033[31m✗ not exported\033[0m  run: mise run nullifier:export\n'
+fi
+
+# ── Voting rounds (only if chain is up) ──────────────────────────
+
+if [ "$CHAIN_UP" = true ]; then
+    echo ""
+    ROUNDS_JSON=$(curl -sf "$API/zally/v1/rounds" 2>/dev/null) || true
+    if [ -n "$ROUNDS_JSON" ]; then
+        echo "$ROUNDS_JSON" | python3 -c "
+import sys,json
+SESSION={0:'unspecified',1:'active',2:'tallying',3:'finalized',4:'pending'}
+CEREMONY={0:'',1:'registering',2:'dealt',3:'confirmed'}
+data=json.load(sys.stdin)
+rounds=data.get('rounds') or []
+if not rounds:
+    print('No voting rounds')
+else:
+    for r in rounds:
+        sid=r.get('vote_round_id','')[:16]
+        raw=r.get('status','?')
+        status=SESSION.get(raw,str(raw).replace('SESSION_STATUS_','').lower()) if isinstance(raw,int) else str(raw).replace('SESSION_STATUS_','').lower()
+        title=r.get('title','')
+        props=len(r.get('proposals') or [])
+        raw_cs=r.get('ceremony_status',0)
+        cs=CEREMONY.get(raw_cs,str(raw_cs).replace('CEREMONY_STATUS_','').lower()) if isinstance(raw_cs,int) else str(raw_cs).replace('CEREMONY_STATUS_','').lower()
+        line=f'round {sid}..  {status}'
+        if status=='pending' and cs: line+=f'  ceremony: {cs}'
+        if props: line+=f'  {props} proposal{\"s\" if props!=1 else \"\"}'
+        if title: line+=f'  \"{title}\"'
+        print(line)
+" 2>/dev/null || true
+    fi
+fi
+
+# ── Paths ─────────────────────────────────────────────────────────
+
+echo ""
+printf '\033[2m'
+if [ "$MULTI" = true ]; then
+    echo "Chain data     ~/.zallyd-val{1,2,3}/"
+    echo "Chain logs     ./sdk/multi-val{1,2,3}.log"
+    echo "EA keys        ~/.zallyd-val*/ea_sk.*"
+else
+    echo "Chain data     ~/.zallyd/"
+    echo "Chain log      ./zallyd.log"
+    echo "EA keys        ~/.zallyd/ea_sk.*"
+fi
+echo "Nullifier data ./nullifier-ingest/nullifiers.{bin,checkpoint}"
+echo "PIR data       ./nullifier-ingest/pir-data/"
+echo "nf-server log  ./nf-serve.log"
+echo "Admin UI       ./shielded_vote_generator_ui/"
+printf '\033[0m'
+'''
+
+[tasks.ui]
+description = "Start admin UI dev server (port 5173)"
+dir = "shielded_vote_generator_ui"
+run = "npm install --silent && npm run dev"
+
+[tasks.test]
+description = "E2E tests against running chain (requires: mise start)"
+run = "cargo test --release --manifest-path e2e-tests/Cargo.toml voting_flow_librustvoting -- --nocapture --ignored"
+
+# ── build:* ─────────────────────────────────────────────────────────
+
+[tasks."build"]
+description = "Build zallyd with FFI (Halo2 + RedPallas)"
+run = "make -C sdk build-ffi"
+
+[tasks."build:quick"]
+description = "Build zallyd without FFI (Go only, no ZK verification)"
+run = "make -C sdk build"
+
+[tasks."build:install"]
+description = "Install zallyd with FFI to $GOBIN"
+run = "make -C sdk install-ffi"
+
+[tasks."build:circuits"]
+description = "Build Rust circuit static library"
+run = "make -C sdk circuits"
+
+[tasks."build:ui"]
+description = "Build admin UI for production"
+dir = "shielded_vote_generator_ui"
+run = "npm run build"
+
+# ── chain:* ─────────────────────────────────────────────────────────
+
+[tasks."chain:init"]
+description = "Wipe and reinitialize a single-validator chain"
+run = "make -C sdk init"
+
+[tasks."chain:start"]
+description = "Start chain daemon (foreground)"
+run = "ZALLY_PIR_URL=${ZALLY_PIR_URL:-http://localhost:3000} make -C sdk start"
+
+[tasks."chain:clean"]
+description = "Remove chain data directory (~/.zallyd)"
+run = "make -C sdk clean"
+confirm = "This will delete ~/.zallyd and the local zallyd binary. Continue?"
+
+[tasks."chain:ceremony"]
+description = "Register Pallas key + create round + wait ACTIVE"
+run = "make -C sdk ceremony"
+
+# ── multi:* ─────────────────────────────────────────────────────────
+
+[tasks."multi:init"]
+description = "Build + init 3-validator chain (no start)"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -e
+make -C sdk install-ffi
+bash sdk/scripts/init_multi.sh
+'''
+
+[tasks."multi:start"]
+description = "Init + nullifiers + PIR + start 3-validator chain"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -e
+PID_FILE="$HOME/.zallyd-multi-pids"
+
+# ── Guard: already running? ──────────────────────────────────────
+PROCS=""
+pgrep -f 'zallyd start --home.*val' > /dev/null 2>&1 && PROCS="$PROCS zallyd"
+pgrep -f 'nf-server.*serve'        > /dev/null 2>&1 && PROCS="$PROCS nf-server"
+if [ -n "$PROCS" ]; then
+    printf '\033[33mAlready running:%s\033[0m\n' "$PROCS"
+    exit 0
+fi
+
+# ── Build + init ─────────────────────────────────────────────────
+make -C sdk install-ffi
+bash sdk/scripts/init_multi.sh
+
+# ── Nullifier pipeline (shared data at nullifier-ingest/) ────────
+make -C nullifier-ingest bootstrap
+make -C nullifier-ingest ingest
+make -C nullifier-ingest export-nf
+
+# ── Start PIR server ────────────────────────────────────────────
+if ! pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
+    nohup make -C nullifier-ingest serve > nf-serve.log 2>&1 &
+    printf '\033[32mStarted nf-server → nf-serve.log\033[0m\n'
+fi
+
+# ── Start 3 validators ──────────────────────────────────────────
+rm -f "$PID_FILE"
+
+ZALLY_PIR_URL=http://localhost:3000 nohup zallyd start --home "$HOME/.zallyd-val1" > sdk/multi-val1.log 2>&1 &
+echo "$!" >> "$PID_FILE"
+printf '\033[32mStarted val1 → sdk/multi-val1.log\033[0m\n'
+
+# Wait for val1 to produce blocks before starting val2/val3.
+printf 'Waiting for val1...'
+for i in $(seq 1 30); do
+    if curl -sf "http://127.0.0.1:26157/status" 2>/dev/null | grep -q '"latest_block_height"'; then
+        HEIGHT=$(curl -sf "http://127.0.0.1:26157/status" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['sync_info']['latest_block_height'])" 2>/dev/null || echo "0")
+        if [ "$HEIGHT" != "0" ]; then
+            printf ' \033[32mblock %s\033[0m\n' "$HEIGHT"
+            break
+        fi
+    fi
+    printf '.'
+    sleep 2
+done
+
+for i in 2 3; do
+    port=$((26057 + i * 100))
+    home="$HOME/.zallyd-val$i"
+    ZALLY_PIR_URL=http://localhost:3000 nohup zallyd start --home "$home" > "sdk/multi-val$i.log" 2>&1 &
+    echo "$!" >> "$PID_FILE"
+    printf '\033[32mStarted val%s → sdk/multi-val%s.log\033[0m\n' "$i" "$i"
+done
+
+# Brief sync delay.
+sleep 5
+
+# ── Register val1 Pallas key ────────────────────────────────────
+zallyd tx vote register-pallas-key \
+    --from validator --chain-id zvote-1 --keyring-backend test \
+    --home "$HOME/.zallyd-val1" --node tcp://localhost:26157 -y > /dev/null 2>&1 \
+    && printf '\033[32mVal1 pallas key registered\033[0m\n' \
+    || printf '\033[33mVal1 pallas key already registered (or skipped)\033[0m\n'
+sleep 3
+
+# ── Register val2 + val3 via CreateValidatorWithPallasKey ────────
+SELF_DELEGATION="10000000stake"
+for i in 2 3; do
+    (cd sdk && go run ./scripts/create-val-tx \
+        --home "$HOME/.zallyd-val$i" \
+        --moniker "val$i" \
+        --amount "$SELF_DELEGATION" \
+        --rpc-url tcp://localhost:26157)
+    printf '\033[32mVal%s registered\033[0m\n' "$i"
+    sleep 2
+done
+
+printf '\n\033[32mMulti-validator chain running.\033[0m PIDs in %s\n' "$PID_FILE"
+printf 'Status: mise run multi:status\n'
+printf 'Stop:   mise run multi:stop\n'
+'''
+
+[tasks."multi:stop"]
+description = "Stop all multi-validator processes"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+PID_FILE="$HOME/.zallyd-multi-pids"
+KILLED=""
+
+# Kill tracked PIDs.
+if [ -f "$PID_FILE" ]; then
+    while read -r pid; do
+        kill "$pid" 2>/dev/null && KILLED="$KILLED $pid" || true
+    done < "$PID_FILE"
+    rm -f "$PID_FILE"
+fi
+
+# Belt-and-suspenders: pkill any stale validators.
+pkill -f 'zallyd start --home.*val' 2>/dev/null && KILLED="$KILLED zallyd" || true
+pkill nf-server 2>/dev/null && KILLED="$KILLED nf-server" || true
+
+if [ -n "$KILLED" ]; then
+    printf '\033[32mStopped:%s\033[0m\n' "$KILLED"
+else
+    echo "No running processes found."
+fi
+'''
+
+[tasks."multi:status"]
+description = "Show running status of all 3 validators"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+echo "=== Multi-Validator Status ==="
+for i in 1 2 3; do
+    home="$HOME/.zallyd-val$i"
+    rpc_port=$((26057 + i * 100))
+    api_port=$((1318 + i * 100))
+    echo ""
+    echo "--- Validator $i (home: $home) ---"
+    proc=$(pgrep -f "zallyd start --home .*val${i}$" 2>/dev/null | head -1)
+    if [ -n "$proc" ]; then
+        echo "  Process : RUNNING (PID $proc)"
+    else
+        echo "  Process : STOPPED"
+    fi
+    rpc_resp=$(curl -sf --max-time 2 "http://127.0.0.1:$rpc_port/status" 2>/dev/null)
+    if [ -n "$rpc_resp" ]; then
+        latest=$(echo "$rpc_resp" | grep -o '"latest_block_height":"[^"]*"' | head -1 | cut -d'"' -f4)
+        moniker=$(echo "$rpc_resp" | grep -o '"moniker":"[^"]*"' | head -1 | cut -d'"' -f4)
+        catching=$(echo "$rpc_resp" | grep -o '"catching_up":[a-z]*' | cut -d':' -f2)
+        echo "  RPC     : UP (port $rpc_port)"
+        echo "  Moniker : $moniker"
+        echo "  Block   : $latest"
+        echo "  Syncing : $catching"
+    else
+        echo "  RPC     : UNREACHABLE (port $rpc_port)"
+    fi
+    api_resp=$(curl -sf --max-time 2 "http://127.0.0.1:$api_port/cosmos/base/tendermint/v1beta1/syncing" 2>/dev/null)
+    if [ -n "$api_resp" ]; then
+        echo "  REST API: UP (port $api_port)"
+    else
+        echo "  REST API: UNREACHABLE (port $api_port)"
+    fi
+done
+echo ""
+
+# nf-server status.
+printf "nf-server      "
+if pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
+    printf '\033[32m● running\033[0m   port 3000\n'
+else
+    printf '\033[31m○ stopped\033[0m\n'
+fi
+'''
+
+[tasks."multi:ui"]
+description = "Admin UI pointed at multi-validator chain (port 1418)"
+dir = "shielded_vote_generator_ui"
+run = "npm install --silent && VITE_CHAIN_URL=http://localhost:1418 npm run dev"
+
+[tasks."multi:clean"]
+description = "Stop + remove all multi-validator data"
+quiet = true
+confirm = "This will stop and delete all multi-validator data (~/.zallyd-val1,2,3). Continue?"
+run = '''
+#!/usr/bin/env bash
+set -e
+mise run multi:stop 2>/dev/null || true
+rm -rf "$HOME/.zallyd-val1" "$HOME/.zallyd-val2" "$HOME/.zallyd-val3"
+rm -f "$HOME/.zallyd-multi-pids"
+printf '\033[32mCleaned multi-validator data.\033[0m\n'
+'''
+
+# ── nullifier:* ─────────────────────────────────────────────────────
+
+[tasks."nullifier:bootstrap"]
+description = "Download nullifier snapshot from DO Spaces"
+run = "make -C nullifier-ingest bootstrap"
+
+[tasks."nullifier:ingest"]
+description = "Sync nullifiers to SYNC_HEIGHT or chain tip"
+run = '''
+#!/usr/bin/env bash
+set -e
+if [ -n "${SYNC_HEIGHT:-}" ]; then
+    make -C nullifier-ingest ingest SYNC_HEIGHT="$SYNC_HEIGHT"
+else
+    make -C nullifier-ingest ingest
+fi
+'''
+
+[tasks."nullifier:export"]
+description = "Build PIR tree and export tier files"
+run = "make -C nullifier-ingest export-nf"
+
+[tasks."nullifier:serve"]
+description = "Start PIR server (port 3000)"
+run = "make -C nullifier-ingest serve"
+
+[tasks."nullifier:status"]
+description = "Show nullifier ingestion progress"
+run = "make -C nullifier-ingest status"
+
+[tasks."nullifier:clean"]
+description = "Remove nullifier data + build artifacts"
+run = "make -C nullifier-ingest clean"
+confirm = "This will delete nullifier data files and Rust build artifacts. Continue?"
+
+# ── test:* ──────────────────────────────────────────────────────────
+
+[tasks."test:unit"]
+description = "Go unit tests (keeper, validation, codec)"
+run = "make -C sdk test-unit"
+
+[tasks."test:integration"]
+description = "Go ABCI pipeline integration tests"
+run = "make -C sdk test-integration"
+
+[tasks."test:helper"]
+description = "Helper server unit tests (SQLite, API, processor)"
+run = "make -C sdk test-helper"
+
+[tasks."test:go"]
+description = "All Go tests (unit + integration + helper)"
+run = "make -C sdk test"
+
+[tasks."test:circuits"]
+description = "Rust circuit unit tests"
+run = "make -C sdk circuits-test"
+
+[tasks."test:ffi"]
+description = "All FFI-backed tests (Halo2 + RedPallas)"
+run = "make -C sdk test-all-ffi"
+
+[tasks."test:nullifier"]
+description = "Nullifier crate unit tests"
+run = "make -C nullifier-ingest test"
+
+[tasks."test:proof"]
+description = "Verify exclusion proofs against ingested data"
+run = "make -C nullifier-ingest test-proof"
+
+# ── validator:* ─────────────────────────────────────────────────────
+
+[tasks."validator:join"]
+description = "Build from source and join network as validator"
+run = "./join-dev.sh"
+
+# ── Flat utilities ──────────────────────────────────────────────────
+
+[tasks.fmt]
+description = "Format Go code"
+run = "make -C sdk fmt"
+
+[tasks.lint]
+description = "Run Go vet"
+run = "make -C sdk lint"
+
+[tasks.fixtures]
+description = "Regenerate all fixture files"
+run = "make -C sdk fixtures"
+
+[tasks.proto]
+description = "Regenerate protobuf code"
+run = "cd sdk/proto && buf generate"
+
+# ── Hidden (internal/deployment) ────────────────────────────────────
+
+[tasks."deploy:caddy"]
+description = "Install Caddyfile + restart Caddy"
+run = "make -C sdk caddy"
+hide = true

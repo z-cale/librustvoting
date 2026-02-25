@@ -55,15 +55,20 @@ var (
 	// Written by EndBlocker when tree root changes. Used by the CommitmentLeaves query.
 	BlockLeafIndexPrefix = []byte{0x08}
 
-	// CeremonyStateKey stores the singleton EA key ceremony state: single key -> CeremonyState (protobuf)
-	CeremonyStateKey = []byte{0x09}
-
 	// VoteManagerKey stores the singleton vote manager address: single key -> VoteManagerState (protobuf)
 	VoteManagerKey = []byte{0x0A}
 
 	// ShareCountPrefix stores share reveal counts per (round, proposal, decision):
 	//   0x0B || round_id || big-endian uint32 proposal_id || big-endian uint32 decision -> uint64 BE
 	ShareCountPrefix = []byte{0x0B}
+
+	// PallasKeyPrefix stores the global Pallas PK registry (decoupled from ceremony):
+	//   0x0C || valoper_address_bytes -> ValidatorPallasKey (protobuf)
+	PallasKeyPrefix = []byte{0x0C}
+
+	// CeremonyMissPrefix stores consecutive ceremony miss counters per validator:
+	//   0x0D || valoper_address_bytes -> uint64 BE (miss count)
+	CeremonyMissPrefix = []byte{0x0D}
 )
 
 // NullifierKey returns the store key for a nullifier scoped by type and round.
@@ -194,6 +199,18 @@ func ShareCountKey(roundID []byte, proposalID uint32, decision uint32) []byte {
 	key = appendUint32BE(key, proposalID)
 	key = appendUint32BE(key, decision)
 	return key
+}
+
+// PallasKeyKey returns the store key for a validator's Pallas PK in the global registry.
+// Format: 0x0C || valoper_address_bytes
+func PallasKeyKey(valoperAddr string) []byte {
+	return append(PallasKeyPrefix, []byte(valoperAddr)...)
+}
+
+// CeremonyMissKey returns the store key for a validator's consecutive ceremony miss counter.
+// Format: 0x0D || valoper_address_bytes
+func CeremonyMissKey(valoperAddr string) []byte {
+	return append(CeremonyMissPrefix, []byte(valoperAddr)...)
 }
 
 // TallyResultPrefixForRound returns the KV prefix for all tally results

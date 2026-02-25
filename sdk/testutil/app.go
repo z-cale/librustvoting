@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,6 +65,14 @@ type TestApp struct {
 	// ValPrivKey is the secp256k1 private key of the genesis validator's
 	// operator account. Used for signing ceremony messages in tests.
 	ValPrivKey *secp256k1.PrivKey
+
+	// EaSkDir is the directory for per-round ea_sk files, derived from
+	// the "vote.ea_sk_path" app option. Empty when no EA key is configured.
+	EaSkDir string
+
+	// EaPk is the EA public key (compressed Pallas point). When set, SeedVotingSession
+	// uses this instead of a zero placeholder.
+	EaPk []byte
 }
 
 // SetupTestApp creates a fresh ZallyApp backed by an in-memory database,
@@ -88,7 +97,7 @@ func SetupTestApp(t *testing.T) *TestApp {
 // EA (Election Authority). The secret key is written to a temp file and passed
 // via the "vote.ea_sk_path" app option so that PrepareProposal can decrypt
 // tallies. Returns both the TestApp and the public key for encrypting shares.
-func SetupTestAppWithEAKey(t *testing.T) (*TestApp, *elgamal.PublicKey) {
+func SetupTestAppWithEAKey(t *testing.T) (*TestApp, *elgamal.PublicKey, []byte) {
 	t.Helper()
 
 	sk, pk := elgamal.KeyGen(rand.Reader)
@@ -96,7 +105,8 @@ func SetupTestAppWithEAKey(t *testing.T) (*TestApp, *elgamal.PublicKey) {
 	skBytes, err := elgamal.MarshalSecretKey(sk)
 	require.NoError(t, err)
 
-	skPath := filepath.Join(t.TempDir(), "ea.sk")
+	tmpDir := t.TempDir()
+	skPath := filepath.Join(tmpDir, "ea.sk")
 	require.NoError(t, os.WriteFile(skPath, skBytes, 0600))
 
 	appOpts := simtestutil.AppOptionsMap{
@@ -104,10 +114,22 @@ func SetupTestAppWithEAKey(t *testing.T) (*TestApp, *elgamal.PublicKey) {
 	}
 
 	ta := setupTestApp(t, appOpts)
-	ta.SeedConfirmedCeremony(pk.Point.ToAffineCompressed())
+	ta.EaSkDir = tmpDir
+	ta.EaPk = pk.Point.ToAffineCompressed()
 	ta.SeedVoteManager("zvote1admin")
 
-	return ta, pk
+	return ta, pk, skBytes
+}
+
+// WriteEaSkForRound writes the ea_sk bytes to the per-round file path so the
+// tally PrepareProposal handler can load it. Call after creating a round.
+func (ta *TestApp) WriteEaSkForRound(roundID []byte, eaSkBytes []byte) {
+	ta.t.Helper()
+	if ta.EaSkDir == "" {
+		ta.t.Fatal("EaSkDir not set — use SetupTestAppWithEAKey")
+	}
+	path := filepath.Join(ta.EaSkDir, "ea_sk."+hex.EncodeToString(roundID))
+	require.NoError(ta.t, os.WriteFile(path, eaSkBytes, 0600))
 }
 
 // setupTestApp is the shared implementation for SetupTestApp and SetupTestAppWithEAKey.
@@ -246,25 +268,12 @@ func (ta *TestApp) SeedVoteManager(addr string) {
 	ta.NextBlock()
 }
 
-// SeedConfirmedCeremony writes a confirmed ceremony state (with ea_pk) directly
-// into the module's KV store and commits it via an empty block. This must be
-// called before any CreateVotingSession call, since that handler now requires
-// a confirmed ceremony.
-func (ta *TestApp) SeedConfirmedCeremony(eaPk []byte) {
+// SeedConfirmedCeremony is a no-op retained for test compatibility.
+// Ceremony state is now embedded per-round; rounds start PENDING and
+// auto-confirm via deal/ack. Tests that need an ACTIVE round with ea_pk
+// should use SeedVotingSession directly (which sets ea_pk on the round).
+func (ta *TestApp) SeedConfirmedCeremony(_ []byte) {
 	ta.t.Helper()
-
-	ctx := ta.NewUncachedContext(false, cmtproto.Header{Height: ta.Height})
-	kvStore := ta.VoteKeeper().OpenKVStore(ctx)
-
-	state := &types.CeremonyState{
-		Status: types.CeremonyStatus_CEREMONY_STATUS_CONFIRMED,
-		EaPk:   eaPk,
-	}
-	err := ta.VoteKeeper().SetCeremonyState(kvStore, state)
-	require.NoError(ta.t, err)
-
-	// Commit via an empty block so the IAVL working set changes are persisted.
-	ta.NextBlock()
 }
 
 // SeedVotingSession creates a VoteRound directly in the KV store from a
@@ -282,12 +291,9 @@ func (ta *TestApp) SeedVotingSession(msg *types.MsgCreateVotingSession) []byte {
 	ctx := ta.NewUncachedContext(false, cmtproto.Header{Height: ta.Height})
 	kvStore := ta.VoteKeeper().OpenKVStore(ctx)
 
-	// Read ea_pk from confirmed ceremony state (if present).
-	var eaPk []byte
-	ceremony, err := ta.VoteKeeper().GetCeremonyState(kvStore)
-	if err == nil && ceremony != nil && len(ceremony.EaPk) > 0 {
-		eaPk = ceremony.EaPk
-	} else {
+	// Use the configured ea_pk if available, otherwise a zero placeholder.
+	eaPk := ta.EaPk
+	if len(eaPk) == 0 {
 		eaPk = make([]byte, 32)
 	}
 
@@ -311,7 +317,7 @@ func (ta *TestApp) SeedVotingSession(msg *types.MsgCreateVotingSession) []byte {
 		Description:       msg.Description,
 	}
 
-	err = ta.VoteKeeper().SetVoteRound(kvStore, round)
+	err := ta.VoteKeeper().SetVoteRound(kvStore, round)
 	require.NoError(ta.t, err)
 
 	ta.NextBlock()
@@ -336,29 +342,36 @@ func deriveRoundID(msg *types.MsgCreateVotingSession) []byte {
 	return h.Sum(nil)
 }
 
-// SeedDealtCeremony writes a DEALT ceremony state into the KV store. The
-// ceremony includes a single validator (the genesis validator) with an ECIES
-// payload encrypting eaSkBytes under pallasPk. Commits via an empty block.
-func (ta *TestApp) SeedDealtCeremony(pallasPkBytes, eaPkBytes []byte, payloads []*types.DealerPayload, validators []*types.ValidatorPallasKey) {
+// SeedDealtCeremony creates a PENDING round with DEALT ceremony fields.
+// The round includes the given validators and ECIES payloads. Commits via
+// an empty block. Returns the round ID.
+func (ta *TestApp) SeedDealtCeremony(pallasPkBytes, eaPkBytes []byte, payloads []*types.DealerPayload, validators []*types.ValidatorPallasKey) []byte {
 	ta.t.Helper()
 
 	ctx := ta.NewUncachedContext(false, cmtproto.Header{Height: ta.Height})
 	kvStore := ta.VoteKeeper().OpenKVStore(ctx)
 
-	state := &types.CeremonyState{
-		Status:       types.CeremonyStatus_CEREMONY_STATUS_DEALT,
-		EaPk:         eaPkBytes,
-		Dealer:       "dealer",
-		Validators:   validators,
-		Payloads:     payloads,
-		PhaseStart:   uint64(ta.Time.Unix()),
-		PhaseTimeout: types.DefaultDealTimeout,
+	// Use a deterministic round ID based on the ea_pk.
+	h, _ := blake2b.New256(nil)
+	h.Write(eaPkBytes)
+	roundID := h.Sum(nil)
+
+	round := &types.VoteRound{
+		VoteRoundId:          roundID,
+		Status:               types.SessionStatus_SESSION_STATUS_PENDING,
+		EaPk:                 eaPkBytes,
+		CeremonyStatus:       types.CeremonyStatus_CEREMONY_STATUS_DEALT,
+		CeremonyDealer:       "dealer",
+		CeremonyValidators:   validators,
+		CeremonyPayloads:     payloads,
+		CeremonyPhaseStart:   uint64(ta.Time.Unix()),
+		CeremonyPhaseTimeout: types.DefaultDealTimeout,
 	}
-	err := ta.VoteKeeper().SetCeremonyState(kvStore, state)
+	err := ta.VoteKeeper().SetVoteRound(kvStore, round)
 	require.NoError(ta.t, err)
 
-	// Commit via an empty block so the IAVL working set changes are persisted.
 	ta.NextBlock()
+	return roundID
 }
 
 // ValidatorOperAddr returns the operator (valoper) address of the genesis

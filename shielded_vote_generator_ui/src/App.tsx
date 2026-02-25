@@ -763,6 +763,22 @@ function AboutPage({
           <Step n={3} text="Export the round as JSON or submit it to the shielded vote chain (coming soon)." />
         </div>
 
+        {/* Resources */}
+        <h2 className="text-xs font-semibold text-text-primary mb-3">
+          Resources
+        </h2>
+        <div className="bg-surface-1 border border-border-subtle rounded-xl p-5 space-y-2 mb-8">
+          <a
+            href="https://valargroup.gitbook.io/shielded-vote-docs/chain/building-from-source"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-[11px] text-accent hover:underline"
+          >
+            <ExternalLink size={12} />
+            Building from Source
+          </a>
+        </div>
+
         {/* Footer note */}
         <p className="text-[10px] text-text-muted text-center">
           All data is stored locally in your browser. Nothing is sent to a
@@ -1727,7 +1743,7 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
             >
               <Plus size={12} />
-              Add validator
+              Fund validator
             </button>
             <button
               onClick={fetchValidators}
@@ -1918,9 +1934,9 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
         </div>
       </div>
 
-      {/* Add validator modal */}
+      {/* Fund validator modal */}
       {showAddModal && (
-        <AddValidatorModal
+        <FundValidatorModal
           wallet={wallet}
           onClose={() => setShowAddModal(false)}
         />
@@ -1931,7 +1947,7 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
 
 /* ── Add validator modal ────────────────────────────────────── */
 
-function AddValidatorModal({
+function FundValidatorModal({
   wallet,
   onClose,
 }: {
@@ -1940,9 +1956,11 @@ function AddValidatorModal({
 }) {
   const [devKey, setDevKey] = useState(DEFAULT_DEV_KEY);
   const [devKeyVisible, setDevKeyVisible] = useState(false);
-  const [validatorAddress, setValidatorAddress] = useState("");
+  const [recipientAddress, setRecipientAddress] = useState("");
   const [addressError, setAddressError] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [amount, setAmount] = useState("1000000");
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; txHash?: string; error?: string } | null>(null);
   const walletConnected = !!wallet.address;
 
   const handleConnectDev = async () => {
@@ -1950,10 +1968,9 @@ function AddValidatorModal({
     setDevKey("");
   };
 
-  // Validate bech32 address on change.
   const handleAddressChange = (value: string) => {
     const trimmed = value.trim();
-    setValidatorAddress(trimmed);
+    setRecipientAddress(trimmed);
     if (!trimmed) {
       setAddressError("");
       return;
@@ -1966,20 +1983,39 @@ function AddValidatorModal({
     }
   };
 
-  const addressValid = validatorAddress.length > 0 && !addressError;
+  const addressValid = recipientAddress.length > 0 && !addressError;
+  const amountNum = parseInt(amount, 10);
+  const amountValid = !isNaN(amountNum) && amountNum > 0;
+  const canSubmit = addressValid && amountValid && !sending;
 
-  const handleSubmit = () => {
-    if (addressValid) {
-      setSubmitted(true);
+  const handleSubmit = async () => {
+    if (!canSubmit || !wallet.signer) return;
+    setSending(true);
+    setResult(null);
+    try {
+      const base = chainApi.getApiBase();
+      const res = await cosmosTx.fundValidator(base, wallet.signer, recipientAddress, amount);
+      if (res.code === 0) {
+        setResult({ success: true, txHash: res.tx_hash });
+      } else {
+        setResult({ success: false, error: res.log || `Transaction failed (code ${res.code})` });
+      }
+    } catch (e) {
+      setResult({ success: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSending(false);
     }
   };
+
+  // Display amount in ZVOTE (1 ZVOTE = 1,000,000 uzvote)
+  const displayAmount = amountValid ? `${(amountNum / 1_000_000).toLocaleString()} ZVOTE` : "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-surface-1 border border-border rounded-xl shadow-xl max-w-md w-full mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
           <h3 className="text-sm font-semibold text-text-primary">
-            {walletConnected ? "Add validator" : "Connect admin wallet"}
+            {walletConnected ? "Fund validator" : "Connect admin wallet"}
           </h3>
           <button
             onClick={onClose}
@@ -1991,58 +2027,48 @@ function AddValidatorModal({
 
         <div className="px-5 py-4 space-y-3">
           {walletConnected ? (
-            submitted ? (
+            result?.success ? (
               /* Success state */
               <div className="space-y-3">
                 <div className="bg-success/10 border border-success/30 rounded-lg p-4">
                   <div className="flex items-center gap-2 mb-2">
                     <CheckCircle2 size={16} className="text-success" />
                     <span className="text-xs font-semibold text-success">
-                      Validator authorized
+                      Funds sent
                     </span>
                   </div>
-                  <p className="text-[11px] text-text-secondary mb-2">
-                    The validator you selected has permission to become a validator.
-                    Tell them to run the make validator command:
+                  <p className="text-[11px] text-text-secondary">
+                    {displayAmount} sent to the validator address.
                   </p>
-                  <div className="bg-surface-2 rounded-lg p-3 font-mono text-[11px] text-text-primary">
-                    make validator
-                  </div>
                 </div>
 
                 <div className="bg-surface-2 rounded-lg p-3">
-                  <SettingsStubRow label="Validator address" value={
-                    `${validatorAddress.slice(0, 14)}...${validatorAddress.slice(-8)}`
+                  <SettingsStubRow label="Recipient" value={
+                    `${recipientAddress.slice(0, 14)}...${recipientAddress.slice(-8)}`
                   } />
-                  <SettingsStubRow label="Authorized by" value={
-                    `${wallet.address!.slice(0, 12)}...${wallet.address!.slice(-6)}`
-                  } />
-                </div>
-
-                <div className="flex items-start gap-2 bg-warning/10 border border-warning/30 rounded-lg p-3">
-                  <AlertTriangle size={13} className="text-warning mt-0.5 shrink-0" />
-                  <p className="text-[11px] text-text-secondary">
-                    This confirmation is mocked for now. The on-chain authorization transaction is not yet implemented. Ask Roman for setup help.
-                  </p>
+                  <SettingsStubRow label="Amount" value={displayAmount} />
+                  {result.txHash && (
+                    <SettingsStubRow label="TX hash" value={
+                      `${result.txHash.slice(0, 12)}...${result.txHash.slice(-8)}`
+                    } />
+                  )}
                 </div>
               </div>
             ) : (
-              /* Address input state */
+              /* Input state */
               <div className="space-y-3">
-                <div className="flex items-start gap-2 bg-warning/10 border border-warning/30 rounded-lg p-3">
-                  <AlertTriangle size={13} className="text-warning mt-0.5 shrink-0" />
-                  <p className="text-[11px] text-text-secondary">
-                    Authorize validator is not built out from the web UI yet. Ask Roman for setup help until we do that.
-                  </p>
-                </div>
+                <p className="text-[11px] text-text-secondary">
+                  Send stake tokens to a validator address. Only meaningful when
+                  connected with the bootstrap operator key.
+                </p>
 
                 <div>
                   <label className="block text-[11px] text-text-secondary mb-1.5">
-                    Validator address
+                    Recipient address
                   </label>
                   <input
                     type="text"
-                    value={validatorAddress}
+                    value={recipientAddress}
                     onChange={(e) => handleAddressChange(e.target.value)}
                     placeholder="zvote1..."
                     spellCheck={false}
@@ -2056,13 +2082,40 @@ function AddValidatorModal({
                   )}
                 </div>
 
-                <SettingsStubRow label="Signer" value={
+                <div>
+                  <label className="block text-[11px] text-text-secondary mb-1.5">
+                    Amount (uzvote)
+                  </label>
+                  <input
+                    type="text"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value.trim())}
+                    placeholder="1000000"
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+                  />
+                  {amountValid && (
+                    <p className="text-[10px] text-text-muted mt-1">
+                      = {displayAmount}
+                    </p>
+                  )}
+                </div>
+
+                <SettingsStubRow label="From" value={
                   `${wallet.address!.slice(0, 12)}...${wallet.address!.slice(-6)}`
                 } />
+
+                {result && !result.success && (
+                  <div className="flex items-start gap-2 bg-danger/10 border border-danger/30 rounded-lg p-3">
+                    <AlertCircle size={13} className="text-danger mt-0.5 shrink-0" />
+                    <p className="text-[11px] text-text-secondary break-all">{result.error}</p>
+                  </div>
+                )}
               </div>
             )
           ) : (
-            /* Wallet connection state — same as PublishModal */
+            /* Wallet connection state */
             <div className="space-y-3">
               <button
                 onClick={wallet.connect}
@@ -2133,15 +2186,19 @@ function AddValidatorModal({
             onClick={onClose}
             className="px-3 py-1.5 text-[11px] text-text-secondary hover:text-text-primary hover:bg-surface-2 rounded-md transition-colors cursor-pointer"
           >
-            {submitted ? "Done" : "Cancel"}
+            {result?.success ? "Done" : "Cancel"}
           </button>
-          {walletConnected && !submitted && (
+          {walletConnected && !result?.success && (
             <button
               onClick={handleSubmit}
-              disabled={!addressValid}
+              disabled={!canSubmit}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-md text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
             >
-              Authorize validator
+              {sending ? (
+                <><Loader2 size={12} className="animate-spin" /> Sending...</>
+              ) : (
+                "Send funds"
+              )}
             </button>
           )}
         </div>
@@ -2153,9 +2210,11 @@ function AddValidatorModal({
 /* ── On-chain rounds view ────────────────────────────────────── */
 
 const STATUS_MAP: Record<string | number, { label: string; color: string }> = {
+  SESSION_STATUS_PENDING: { label: "Pending", color: "bg-orange-500/20 text-orange-400" },
   SESSION_STATUS_ACTIVE: { label: "Active", color: "bg-success/20 text-success" },
   SESSION_STATUS_TALLYING: { label: "Tallying", color: "bg-warning/20 text-warning" },
   SESSION_STATUS_FINALIZED: { label: "Finalized", color: "bg-blue-500/20 text-blue-400" },
+  4: { label: "Pending", color: "bg-orange-500/20 text-orange-400" },
   1: { label: "Active", color: "bg-success/20 text-success" },
   2: { label: "Tallying", color: "bg-warning/20 text-warning" },
   3: { label: "Finalized", color: "bg-blue-500/20 text-blue-400" },
@@ -2433,6 +2492,24 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                     />
                   )}
                 </div>
+
+                {/* Ceremony log */}
+                {round.ceremony_log && round.ceremony_log.length > 0 && (
+                  <div className="px-5 pb-3">
+                    <details className="group">
+                      <summary className="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary select-none">
+                        Ceremony log ({round.ceremony_log.length} entries)
+                      </summary>
+                      <div className="mt-1.5 bg-surface-2 rounded-md p-2 max-h-40 overflow-y-auto">
+                        {round.ceremony_log.map((entry, i) => (
+                          <div key={i} className="text-[10px] font-mono text-text-secondary leading-relaxed">
+                            {entry}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                )}
 
                 {/* Proposals */}
                 {summary?.proposals && summary.proposals.length > 0 && (

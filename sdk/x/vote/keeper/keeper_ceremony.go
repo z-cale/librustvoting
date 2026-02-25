@@ -10,37 +10,35 @@ import (
 	"github.com/z-cale/zally/x/vote/types"
 )
 
-// GetCeremonyState retrieves the singleton ceremony state from the KV store.
-// Returns nil, nil if no ceremony has been initialized yet.
-func (k Keeper) GetCeremonyState(kvStore store.KVStore) (*types.CeremonyState, error) {
-	bz, err := kvStore.Get(types.CeremonyStateKey)
-	if err != nil {
-		return nil, err
-	}
-	if bz == nil {
-		return nil, nil
-	}
+// DefaultCeremonyMissJailThreshold is the number of consecutive ceremony
+// misses after which a validator is jailed.
+const DefaultCeremonyMissJailThreshold = 3
 
-	var state types.CeremonyState
-	if err := unmarshal(bz, &state); err != nil {
-		return nil, err
-	}
-	return &state, nil
+// AppendCeremonyLog appends a timestamped entry to the round's ceremony log.
+// The entry is prefixed with the block height for chronological context.
+func AppendCeremonyLog(round *types.VoteRound, blockHeight uint64, msg string) {
+	entry := fmt.Sprintf("[height=%d] %s", blockHeight, msg)
+	round.CeremonyLog = append(round.CeremonyLog, entry)
 }
 
-// SetCeremonyState stores the singleton ceremony state in the KV store.
-func (k Keeper) SetCeremonyState(kvStore store.KVStore, state *types.CeremonyState) error {
-	bz, err := marshal(state)
-	if err != nil {
-		return err
+// ---------------------------------------------------------------------------
+// Per-round ceremony helpers (operate on VoteRound ceremony fields)
+// ---------------------------------------------------------------------------
+
+// OneThirdAcked returns true if at least 1/3 of round ceremony validators have
+// acknowledged. Uses integer arithmetic: acks * 3 >= validators.
+func OneThirdAcked(round *types.VoteRound) bool {
+	n := len(round.CeremonyValidators)
+	if n == 0 {
+		return false
 	}
-	return kvStore.Set(types.CeremonyStateKey, bz)
+	return len(round.CeremonyAcks)*3 >= n
 }
 
-// FindValidatorInCeremony returns the index and true if valAddr is found
-// in the ceremony's validator list, or (-1, false) otherwise.
-func FindValidatorInCeremony(state *types.CeremonyState, valAddr string) (int, bool) {
-	for i, v := range state.Validators {
+// FindValidatorInRoundCeremony returns the index and true if valAddr is found
+// in the round's ceremony_validators list, or (-1, false) otherwise.
+func FindValidatorInRoundCeremony(round *types.VoteRound, valAddr string) (int, bool) {
+	for i, v := range round.CeremonyValidators {
 		if v.ValidatorAddress == valAddr {
 			return i, true
 		}
@@ -48,10 +46,10 @@ func FindValidatorInCeremony(state *types.CeremonyState, valAddr string) (int, b
 	return -1, false
 }
 
-// FindAckForValidator returns the index and true if valAddr has an ack entry
-// in the ceremony, or (-1, false) otherwise.
-func FindAckForValidator(state *types.CeremonyState, valAddr string) (int, bool) {
-	for i, a := range state.Acks {
+// FindAckInRoundCeremony returns the index and true if valAddr has an ack entry
+// in the round's ceremony, or (-1, false) otherwise.
+func FindAckInRoundCeremony(round *types.VoteRound, valAddr string) (int, bool) {
+	for i, a := range round.CeremonyAcks {
 		if a.ValidatorAddress == valAddr {
 			return i, true
 		}
@@ -59,88 +57,87 @@ func FindAckForValidator(state *types.CeremonyState, valAddr string) (int, bool)
 	return -1, false
 }
 
-// AllValidatorsAcked returns true if every registered validator has a
-// corresponding ack entry in the ceremony state.
-func AllValidatorsAcked(state *types.CeremonyState) bool {
-	if len(state.Validators) == 0 {
-		return false
-	}
-	for _, v := range state.Validators {
-		if _, found := FindAckForValidator(state, v.ValidatorAddress); !found {
-			return false
-		}
-	}
-	return true
-}
-
-// TwoThirdsAcked returns true if at least 2/3 of registered validators have
-// acknowledged. Uses integer arithmetic to avoid floating point:
-// acks * 3 >= validators * 2.
-func TwoThirdsAcked(state *types.CeremonyState) bool {
-	n := len(state.Validators)
-	if n == 0 {
-		return false
-	}
-	return len(state.Acks)*3 >= n*2
-}
-
-// NonAckingValidators returns the operator addresses of validators that have
-// not yet submitted an ack entry.
-func NonAckingValidators(state *types.CeremonyState) []string {
-	var addrs []string
-	for _, v := range state.Validators {
-		if _, found := FindAckForValidator(state, v.ValidatorAddress); !found {
-			addrs = append(addrs, v.ValidatorAddress)
-		}
-	}
-	return addrs
-}
-
-// StripNonAckers removes non-acking validators from state.Validators and
-// their corresponding entries from state.Payloads. After this call, only
-// validators with a matching ack remain.
-func StripNonAckers(state *types.CeremonyState) {
-	acked := make(map[string]bool, len(state.Acks))
-	for _, a := range state.Acks {
+// StripNonAckersFromRound removes non-acking validators from the round's
+// CeremonyValidators and CeremonyPayloads. After this call, only validators
+// with a matching ack remain.
+func StripNonAckersFromRound(round *types.VoteRound) {
+	acked := make(map[string]bool, len(round.CeremonyAcks))
+	for _, a := range round.CeremonyAcks {
 		acked[a.ValidatorAddress] = true
 	}
 
-	// Filter validators.
-	kept := state.Validators[:0]
-	for _, v := range state.Validators {
+	kept := round.CeremonyValidators[:0]
+	for _, v := range round.CeremonyValidators {
 		if acked[v.ValidatorAddress] {
 			kept = append(kept, v)
 		}
 	}
-	state.Validators = kept
+	round.CeremonyValidators = kept
 
-	// Filter payloads.
-	keptPayloads := state.Payloads[:0]
-	for _, p := range state.Payloads {
+	keptPayloads := round.CeremonyPayloads[:0]
+	for _, p := range round.CeremonyPayloads {
 		if acked[p.ValidatorAddress] {
 			keptPayloads = append(keptPayloads, p)
 		}
 	}
-	state.Payloads = keptPayloads
+	round.CeremonyPayloads = keptPayloads
 }
 
-// JailValidator resolves a validator operator address to its consensus address
-// and jails the validator via the staking module.
-func (k Keeper) JailValidator(ctx context.Context, operatorAddr string) error {
-	valAddr, err := sdk.ValAddressFromBech32(operatorAddr)
-	if err != nil {
-		return fmt.Errorf("invalid operator address %s: %w", operatorAddr, err)
-	}
+// ---------------------------------------------------------------------------
+// Ceremony miss counter (consecutive misses per validator)
+// ---------------------------------------------------------------------------
 
-	validator, err := k.stakingKeeper.GetValidator(ctx, valAddr)
-	if err != nil {
-		return fmt.Errorf("validator %s not found: %w", operatorAddr, err)
-	}
+// JailValidator jails a validator by its operator address.
+// Resolves the valoper → consensus address via the staking keeper.
+func (k Keeper) JailValidator(ctx context.Context, valoperAddr string) (err error) {
+	// Recover from panics in GetConsAddr (happens when consensus pubkey is nil).
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic resolving consensus address for %s: %v", valoperAddr, r)
+		}
+	}()
 
-	consAddr, err := validator.GetConsAddr()
+	valAddr, err := sdk.ValAddressFromBech32(valoperAddr)
 	if err != nil {
-		return fmt.Errorf("failed to get consensus address for %s: %w", operatorAddr, err)
+		return fmt.Errorf("invalid valoper address %q: %w", valoperAddr, err)
 	}
-
+	val, err := k.stakingKeeper.GetValidator(ctx, valAddr)
+	if err != nil {
+		return fmt.Errorf("failed to get validator %s: %w", valoperAddr, err)
+	}
+	consAddr, err := val.GetConsAddr()
+	if err != nil {
+		return fmt.Errorf("failed to get consensus address for %s: %w", valoperAddr, err)
+	}
 	return k.stakingKeeper.Jail(ctx, consAddr)
+}
+
+// GetCeremonyMissCount returns the consecutive ceremony miss count for a validator.
+func (k Keeper) GetCeremonyMissCount(kvStore store.KVStore, valoperAddr string) (uint64, error) {
+	bz, err := kvStore.Get(types.CeremonyMissKey(valoperAddr))
+	if err != nil {
+		return 0, err
+	}
+	if len(bz) < 8 {
+		return 0, nil
+	}
+	return getUint64BE(bz), nil
+}
+
+// IncrementCeremonyMiss increments the consecutive miss counter for a validator
+// and returns the new count.
+func (k Keeper) IncrementCeremonyMiss(kvStore store.KVStore, valoperAddr string) (uint64, error) {
+	count, err := k.GetCeremonyMissCount(kvStore, valoperAddr)
+	if err != nil {
+		return 0, err
+	}
+	count++
+	val := make([]byte, 8)
+	putUint64BE(val, count)
+	return count, kvStore.Set(types.CeremonyMissKey(valoperAddr), val)
+}
+
+// ResetCeremonyMiss resets the consecutive miss counter for a validator to zero.
+func (k Keeper) ResetCeremonyMiss(kvStore store.KVStore, valoperAddr string) error {
+	return kvStore.Delete(types.CeremonyMissKey(valoperAddr))
 }
