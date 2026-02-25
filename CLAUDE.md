@@ -49,18 +49,27 @@ After modifying the FFI public API, you **must** run `make dev` and commit the r
 
 ## Local Development
 
-All top-level workflow commands go through [mise](https://mise.jdx.dev). See `mise.toml` for the full task list.
+All workflow commands go through [mise](https://mise.jdx.dev). Run `mise tasks` to see everything, or `mise tasks --hidden` for internal tasks too. Tasks are thin wrappers over sub-Makefiles (`sdk/Makefile`, `nullifier-ingest/Makefile`).
 
 ### Setup and daily workflow
 
 ```
-mise install        # pin Go 1.24.0, Node 22
+mise install        # pin Go 1.24.0, Rust stable, Node 22
 mise start          # init chain + bootstrap nullifiers + start everything
 mise status         # check service health + voting round state
 mise ui             # admin UI dev server (port 5173, separate terminal)
 mise stop           # stop all services
 mise test           # end-to-end tests against running chain
 ```
+
+### Key namespaces
+
+- **`build:*`** — `build`, `build:quick`, `build:install`, `build:circuits`, `build:ui`
+- **`chain:*`** — `chain:init`, `chain:start`, `chain:clean`, `chain:ceremony`
+- **`multi:*`** — `multi:init`, `multi:stop`, `multi:status`, `multi:clean`
+- **`nullifier:*`** — `nullifier:bootstrap`, `nullifier:ingest`, `nullifier:serve`, `nullifier:status`, `nullifier:clean`
+- **`test:*`** — `test:unit`, `test:integration`, `test:helper`, `test:go`, `test:circuits`, `test:ffi`, `test:nullifier`, `test:proof`
+- **Flat** — `fmt`, `lint`, `fixtures`, `proto`, `validator:join`
 
 ### Full local sequence
 
