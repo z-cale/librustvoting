@@ -209,7 +209,6 @@ jobs:
         run: cargo test --release --manifest-path ../e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
         env:
           ZALLY_API_URL: http://localhost:1318
-          ZALLY_EA_PK_PATH: /home/runner/.zallyd/ea.pk
           HELPER_SERVER_URL: http://localhost:1318
           ZALLY_E2E_VOTE_WINDOW_SECS: "420"
       - name: Upload chain log on failure
