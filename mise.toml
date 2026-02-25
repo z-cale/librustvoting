@@ -180,7 +180,7 @@ run = "npm install --silent && npm run dev"
 
 [tasks.test]
 description = "E2E tests against running chain (requires: mise start)"
-run = "cargo test --release --manifest-path e2e-tests/Cargo.toml -- --nocapture --ignored"
+run = "cargo test --release --manifest-path e2e-tests/Cargo.toml voting_flow_librustvoting -- --nocapture --ignored"
 
 # ── build:* ─────────────────────────────────────────────────────────
 
