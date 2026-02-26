@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { X, Clock, AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
 import {
@@ -116,6 +116,11 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
 
   const chain = useChainInfo();
 
+  // Ref to avoid stale closure — parent passes an inline arrow that changes
+  // every render, but the callback logic should always use the latest version.
+  const onUpdateSettingsRef = useRef(onUpdateSettings);
+  onUpdateSettingsRef.current = onUpdateSettings;
+
   // Fetch snapshot height from PIR server. Returns true if serving.
   const fetchSnapshotHeight = useCallback(async () => {
     try {
@@ -126,7 +131,7 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
       }
       setPirRebuilding(false);
       if (status.height != null) {
-        onUpdateSettings({ snapshotHeight: String(status.height) });
+        onUpdateSettingsRef.current({ snapshotHeight: String(status.height) });
       } else {
         setNhError("PIR server has no checkpoint height");
       }
@@ -135,7 +140,7 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
       setNhError(err instanceof Error ? err.message : "Failed to fetch");
       return true; // stop polling on hard error
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-populate snapshot height from PIR server on mount.
   useEffect(() => {

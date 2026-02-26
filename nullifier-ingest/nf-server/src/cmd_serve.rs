@@ -542,11 +542,14 @@ async fn run_rebuild(state: Arc<AppState>, target_height: u64) -> Result<()> {
 }
 
 async fn get_snapshot_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let phase = state.phase.read().await;
-    let serving = state.serving.read().await;
-
-    let height = serving.as_ref().and_then(|s| s.metadata.height);
-    let num_ranges = serving.as_ref().map(|s| s.metadata.num_ranges);
+    // Read state under locks, then drop before any network I/O.
+    let (phase_json, height, num_ranges) = {
+        let phase = state.phase.read().await;
+        let serving = state.serving.read().await;
+        let h = serving.as_ref().and_then(|s| s.metadata.height);
+        let n = serving.as_ref().map(|s| s.metadata.num_ranges);
+        (serde_json::to_value(&*phase).unwrap_or_default(), h, n)
+    };
 
     // Fetch Zcash mainnet chain tip (best-effort, don't block on failure).
     let zcash_tip = if let Some(lwd_url) = state.lwd_urls.first() {
@@ -555,7 +558,7 @@ async fn get_snapshot_status(State(state): State<Arc<AppState>>) -> impl IntoRes
         None
     };
 
-    let mut resp = serde_json::to_value(&*phase).unwrap_or_default();
+    let mut resp = phase_json;
     if let Some(obj) = resp.as_object_mut() {
         obj.insert("height".to_string(), serde_json::json!(height));
         obj.insert("num_ranges".to_string(), serde_json::json!(num_ranges));
