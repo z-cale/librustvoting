@@ -26,8 +26,7 @@ use crate::path::MerklePath;
 /// Use the type aliases [`TreeServer`] (KV-backed) and [`MemoryTreeServer`]
 /// (in-memory) rather than naming this type directly.
 ///
-/// Methods that mutate the tree (`append`, `checkpoint`) return
-/// `Result<_, ShardTreeError<S::Error>>` so storage failures are visible to
+/// Methods that mutate the tree return `Result` so storage failures are visible to
 /// callers. For [`MemoryTreeServer`] the error type is `Infallible`, so those
 /// results can be safely `.unwrap()`-ed; for [`TreeServer`] the error type is
 /// [`crate::kv_shard_store::KvError`] and must be propagated.
@@ -98,6 +97,41 @@ impl std::fmt::Display for AppendFromKvError {
 }
 
 impl std::error::Error for AppendFromKvError {}
+
+// ---------------------------------------------------------------------------
+// CheckpointError
+// ---------------------------------------------------------------------------
+
+/// Error returned by [`GenericTreeServer::checkpoint`] and [`MemoryTreeServer::checkpoint`].
+#[derive(Debug)]
+pub enum CheckpointError<E> {
+    /// The requested checkpoint height is not strictly greater than the most
+    /// recently recorded one. Checkpoint IDs must increase monotonically.
+    NotMonotonic { prev: u32, requested: u32 },
+    /// The underlying [`ShardTree`] rejected the checkpoint (storage error).
+    Tree(ShardTreeError<E>),
+}
+
+impl<E: std::fmt::Debug> std::fmt::Display for CheckpointError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckpointError::NotMonotonic { prev, requested } => write!(
+                f,
+                "checkpoint height must be strictly increasing: {} <= {}",
+                requested, prev
+            ),
+            CheckpointError::Tree(e) => write!(f, "ShardTree error: {:?}", e),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + 'static> std::error::Error for CheckpointError<E> {}
+
+impl<E> From<ShardTreeError<E>> for CheckpointError<E> {
+    fn from(e: ShardTreeError<E>) -> Self {
+        CheckpointError::Tree(e)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TreeServer constructor
@@ -217,7 +251,11 @@ impl MemoryTreeServer {
     }
 
     /// Snapshot the current tree state and record block-level commitments.
-    pub fn checkpoint(&mut self, height: u32) -> Result<(), shardtree::error::ShardTreeError<std::convert::Infallible>> {
+    ///
+    /// # Errors
+    /// Returns [`CheckpointError::NotMonotonic`] if `height` is not strictly
+    /// greater than the previous checkpoint height.
+    pub fn checkpoint(&mut self, height: u32) -> Result<(), CheckpointError<std::convert::Infallible>> {
         self.inner.checkpoint(height)?;
         let commitments = crate::sync_api::BlockCommitments {
             height,
@@ -290,17 +328,15 @@ where
     /// Called by EndBlocker after processing all transactions in a block.
     /// The root at this checkpoint becomes a valid anchor for ZKP #2 / ZKP #3.
     ///
-    /// # Panics
-    /// Panics if `height` is not strictly greater than the previous checkpoint
-    /// height. Checkpoint IDs must increase monotonically.
-    pub fn checkpoint(&mut self, height: u32) -> Result<(), ShardTreeError<S::Error>> {
+    /// # Errors
+    /// Returns [`CheckpointError::NotMonotonic`] if `height` is not strictly
+    /// greater than the previous checkpoint height.
+    /// Returns [`CheckpointError::Tree`] if the underlying shard store fails.
+    pub fn checkpoint(&mut self, height: u32) -> Result<(), CheckpointError<S::Error>> {
         if let Some(prev) = self.latest_checkpoint {
-            assert!(
-                height > prev,
-                "checkpoint height must be strictly increasing: {} <= {}",
-                height,
-                prev
-            );
+            if height <= prev {
+                return Err(CheckpointError::NotMonotonic { prev, requested: height });
+            }
         }
         self.inner.checkpoint(height)?;
         self.latest_checkpoint = Some(height);

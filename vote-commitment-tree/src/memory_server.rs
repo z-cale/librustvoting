@@ -131,15 +131,32 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_monotonicity_panics_on_regression() {
+    fn checkpoint_monotonicity_returns_error_on_regression() {
+        use crate::server::CheckpointError;
+
         let mut tree = MemoryTreeServer::empty();
         tree.append(fp(1)).unwrap();
         tree.checkpoint(5).unwrap();
         tree.append(fp(2)).unwrap();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tree.checkpoint(5).unwrap();
-        }));
-        assert!(result.is_err(), "expected panic on non-monotonic checkpoint");
+
+        // Equal height: must return NotMonotonic.
+        let err = tree.checkpoint(5).expect_err("expected error on duplicate checkpoint height");
+        assert!(
+            matches!(err, CheckpointError::NotMonotonic { prev: 5, requested: 5 }),
+            "unexpected error variant: {:?}",
+            err,
+        );
+
+        // Regressing height: must also return NotMonotonic.
+        let err = tree.checkpoint(3).expect_err("expected error on regressing checkpoint height");
+        assert!(
+            matches!(err, CheckpointError::NotMonotonic { prev: 5, requested: 3 }),
+            "unexpected error variant: {:?}",
+            err,
+        );
+
+        // The tree must still be usable: a strictly increasing height succeeds.
+        tree.checkpoint(6).expect("checkpoint with higher height must succeed");
     }
 
     /// Verifies that old checkpoints are evicted from the store once the
