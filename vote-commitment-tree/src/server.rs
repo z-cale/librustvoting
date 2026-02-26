@@ -419,18 +419,6 @@ where
         self.next_position = pos;
     }
 
-    /// Reset the in-memory `latest_checkpoint` to `None`.
-    ///
-    /// On rollback the Go keeper calls [`TreeServer::truncate_kv_data`] before
-    /// recreating the handle, which wipes all checkpoint blobs from KV. The
-    /// fresh handle's [`TreeServer::new`] therefore reads `max_checkpoint_id()
-    /// = None` and already starts with `latest_checkpoint = None`. This method
-    /// is belt-and-suspenders: it makes the intent explicit and guards against
-    /// a future refactor that might skip `truncate_kv_data`.
-    pub fn clear_latest_checkpoint(&mut self) {
-        self.latest_checkpoint = None;
-    }
-
     /// Build a Merkle path for the leaf at `position`, valid at the given
     /// checkpoint `anchor_height`.
     ///
