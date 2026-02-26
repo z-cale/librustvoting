@@ -121,8 +121,14 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
   const onUpdateSettingsRef = useRef(onUpdateSettings);
   useEffect(() => { onUpdateSettingsRef.current = onUpdateSettings; });
 
-  // Fetch snapshot height from PIR server. Returns true if serving.
-  const fetchSnapshotHeight = useCallback(async () => {
+  // Fetch snapshot height from PIR server. Manages its own loading/error
+  // state so callers don't need synchronous setState in effect bodies.
+  // Returns true if the server is serving (not rebuilding).
+  const fetchSnapshotHeight = useCallback(async (setLoading: boolean) => {
+    if (setLoading) {
+      setNhLoading(true);
+      setNhError(null);
+    }
     try {
       const status = await getSnapshotStatus();
       if (status.phase === "rebuilding") {
@@ -139,24 +145,21 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
     } catch (err) {
       setNhError(err instanceof Error ? err.message : "Failed to fetch");
       return true; // stop polling on hard error
+    } finally {
+      if (setLoading) setNhLoading(false);
     }
   }, []);
 
-  // Auto-populate snapshot height from PIR server on mount.
+  // Auto-populate snapshot height from PIR server on mount and round switch.
   useEffect(() => {
     if (isReadonly) return;
-    setNhLoading(true);
-    setNhError(null);
-    fetchSnapshotHeight().finally(() => setNhLoading(false));
-  }, [isReadonly, fetchSnapshotHeight]);
+    fetchSnapshotHeight(true);
+  }, [round.id, isReadonly, fetchSnapshotHeight]);
 
   // Poll while PIR is rebuilding, auto-update when done.
   useEffect(() => {
     if (!pirRebuilding) return;
-    const interval = setInterval(async () => {
-      const done = await fetchSnapshotHeight();
-      if (done) setNhLoading(false);
-    }, 5000);
+    const interval = setInterval(() => { fetchSnapshotHeight(false); }, 5000);
     return () => clearInterval(interval);
   }, [pirRebuilding, fetchSnapshotHeight]);
 

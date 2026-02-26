@@ -37,8 +37,11 @@ export function SnapshotSettingsPage() {
 
   // Initial load
   useEffect(() => {
-    fetchStatus();
-    fetchActiveRound();
+    const init = async () => {
+      await fetchStatus();
+      await fetchActiveRound();
+    };
+    init();
   }, [fetchStatus, fetchActiveRound]);
 
   // Poll during rebuild
