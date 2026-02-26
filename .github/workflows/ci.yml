@@ -20,11 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: false
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Go build
         uses: actions/cache@v4
         with:
@@ -44,12 +41,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -71,10 +64,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Run helper tests
         run: make test-helper
 
@@ -87,12 +78,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -114,12 +101,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -144,12 +127,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build (circuits + e2e-tests + tree client)
         uses: actions/cache@v4
         with:
@@ -230,12 +209,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build (circuits + e2e-tests)
         uses: actions/cache@v4
         with:
@@ -252,8 +227,6 @@ jobs:
           key: ${{ runner.os }}-multi-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-multi-go-
-      - name: Install mise
-        uses: jdx/mise-action@v2
       - name: Start 3-validator chain
         run: mise run multi:start-chain
         env:
@@ -310,12 +283,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build (circuits)
         uses: actions/cache@v4
         with:
@@ -330,8 +299,6 @@ jobs:
           key: ${{ runner.os }}-join-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-join-go-
-      - name: Install mise
-        uses: jdx/mise-action@v2
       - name: Build and install zallyd + create-val-tx
         run: |
           make install-ffi
