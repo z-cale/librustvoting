@@ -70,7 +70,7 @@ jobs:
         run: go build -o create-val-tx ./scripts/create-val-tx
 
       - name: Copy init script to build root
-        run: cp scripts/init_multi_ci.sh init_multi_ci.sh
+        run: cp scripts/init_multi.sh init_multi.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -79,7 +79,7 @@ jobs:
           path: |
             sdk/zallyd
             sdk/create-val-tx
-            sdk/init_multi_ci.sh
+            sdk/init_multi.sh
 
   deploy:
     name: Deploy to remote
@@ -108,7 +108,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          source: "zallyd,create-val-tx,init_multi_ci.sh"
+          source: "zallyd,create-val-tx,init_multi.sh"
           target: ${{ env.DEPLOY_PATH }}
 
       - name: Stop services
@@ -147,7 +147,7 @@ jobs:
           script: |
             export HOME=${{ env.DEPLOY_PATH }} PATH=${{ env.DEPLOY_PATH }}:$PATH
             chmod +x ${{ env.DEPLOY_PATH }}/zallyd ${{ env.DEPLOY_PATH }}/create-val-tx
-            bash ${{ env.DEPLOY_PATH }}/init_multi_ci.sh
+            bash ${{ env.DEPLOY_PATH }}/init_multi.sh --ci
 
       - name: Start services
         uses: appleboy/ssh-action@v1.0.3
