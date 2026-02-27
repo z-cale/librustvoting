@@ -88,13 +88,12 @@ curl -s localhost:1318/zally/v1/rounds | jq
 zallyd status --home ~/.zallyd | jq '.sync_info'
 
 # Follow node logs
-tail -f ~/.zallyd/node.log
+journalctl -u zallyd -f
 
-# Stop the node
-pkill zallyd
-
-# Restart the node (after stopping)
-zallyd start --home ~/.zallyd
+# Service management
+sudo systemctl status zallyd
+sudo systemctl stop zallyd
+sudo systemctl restart zallyd
 ```
 
 ## Chain info

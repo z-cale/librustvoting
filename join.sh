@@ -382,9 +382,12 @@ if [ -n "$VALIDATOR_URL" ]; then
   fi
 fi
 
-# ─── Start node ──────────────────────────────────────────────────────────────
+# ─── Systemd service ─────────────────────────────────────────────────────────
+# Install a systemd unit so zallyd survives SSH disconnects and reboots.
 
 LOG_FILE="${HOME_DIR}/node.log"
+ZALLYD_BIN=$(command -v zallyd)
+SERVICE_NAME="zallyd"
 
 # Re-register URL with the vote network (idempotent).
 # Once bonded, this promotes the pending entry to vote_servers directly.
@@ -405,12 +408,31 @@ register_url() {
 }
 
 echo ""
-echo "=== Starting node ==="
-echo "Logs: ${LOG_FILE}"
-zallyd start --home "${HOME_DIR}" >> "${LOG_FILE}" 2>&1 &
-ZALLYD_PID=$!
+echo "=== Installing systemd service ==="
 
-trap "echo ''; echo 'zallyd is still running in the background (PID: ${ZALLYD_PID}).'; echo \"Stop it with: kill ${ZALLYD_PID}\"; echo \"Logs: ${LOG_FILE}\"; exit 0" INT TERM
+sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<SVCEOF
+[Unit]
+Description=Zally validator (${MONIKER})
+After=network.target
+
+[Service]
+Type=simple
+User=$(whoami)
+ExecStart=${ZALLYD_BIN} start --home ${HOME_DIR}
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ${SERVICE_NAME}
+sudo systemctl start ${SERVICE_NAME}
+echo "Service ${SERVICE_NAME} started (survives SSH disconnect and reboots)."
+echo "Logs: ${LOG_FILE}"
 
 # Give the node a moment to start up.
 sleep 5
@@ -481,6 +503,12 @@ else
 fi
 
 echo ""
-echo "Node is running (PID: ${ZALLYD_PID}). Logs: ${LOG_FILE}"
-echo "Press Ctrl+C to detach (node keeps running). To stop: kill ${ZALLYD_PID}"
-wait $ZALLYD_PID
+echo "============================================="
+echo "  Validator is running as systemd service"
+echo "============================================="
+echo ""
+echo "  Service:  ${SERVICE_NAME}"
+echo "  Logs:     journalctl -u ${SERVICE_NAME} -f"
+echo "  Status:   sudo systemctl status ${SERVICE_NAME}"
+echo "  Stop:     sudo systemctl stop ${SERVICE_NAME}"
+echo "  Restart:  sudo systemctl restart ${SERVICE_NAME}"
