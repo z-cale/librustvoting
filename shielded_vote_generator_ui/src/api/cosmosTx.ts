@@ -206,25 +206,24 @@ const MsgCreateVotingSessionProto = {
   },
 };
 
-// ── Protobuf type: MsgUnjailValidator ────────────────────────────
+// ── Protobuf type: MsgUnjail (cosmos.slashing.v1beta1) ──────────
 
-// message MsgUnjailValidator { string creator = 1; string validator_address = 2; }
-const MsgUnjailValidatorProto = {
+// message MsgUnjail { string validator_addr = 1; }
+const MsgUnjailProto = {
   encode(
-    message: { creator: string; validatorAddress: string },
+    message: { validatorAddr: string },
     writer: ProtoWriter = ProtoWriter.create(),
   ): ProtoWriter {
-    if (message.creator !== "") writer.uint32(10).string(message.creator);
-    if (message.validatorAddress !== "") writer.uint32(18).string(message.validatorAddress);
+    if (message.validatorAddr !== "") writer.uint32(10).string(message.validatorAddr);
     return writer;
   },
-  decode(): { creator: string; validatorAddress: string } {
+  decode(): { validatorAddr: string } {
     throw new Error("decode not implemented");
   },
   fromPartial(
-    object: Partial<{ creator: string; validatorAddress: string }>,
-  ): { creator: string; validatorAddress: string } {
-    return { creator: object.creator ?? "", validatorAddress: object.validatorAddress ?? "" };
+    object: Partial<{ validatorAddr: string }>,
+  ): { validatorAddr: string } {
+    return { validatorAddr: object.validatorAddr ?? "" };
   },
 };
 
@@ -270,7 +269,7 @@ function createRegistry(): Registry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registry.register("/zvote.v1.MsgCreateVotingSession", MsgCreateVotingSessionProto as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  registry.register("/zvote.v1.MsgUnjailValidator", MsgUnjailValidatorProto as any);
+  registry.register("/cosmos.slashing.v1beta1.MsgUnjail", MsgUnjailProto as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registry.register("/cosmos.bank.v1beta1.MsgSend", MsgSendProto as any);
   return registry;
@@ -619,23 +618,23 @@ export async function fundValidator(
 }
 
 /**
- * Sign and broadcast a MsgUnjailValidator transaction.
+ * Sign and broadcast a standard cosmos.slashing.v1beta1.MsgUnjail transaction.
  *
- * Any bonded validator can unjail any jailed validator.
+ * The signer must be the jailed validator's operator account.
+ * `validatorAddress` is the valoper bech32 address of the jailed validator.
  */
 export async function unjailValidator(
   apiBase: string,
   signer: OfflineDirectSigner,
   validatorAddress: string,
 ): Promise<BroadcastResult> {
-  const [account] = await signer.getAccounts();
   return signAndBroadcast({
     apiBase,
     signer,
     messages: [
       {
-        typeUrl: "/zvote.v1.MsgUnjailValidator",
-        value: { creator: account.address, validatorAddress },
+        typeUrl: "/cosmos.slashing.v1beta1.MsgUnjail",
+        value: { validatorAddr: validatorAddress },
       },
     ],
   });

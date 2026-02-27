@@ -2185,6 +2185,7 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
                               className="text-[9px] px-1.5 py-0.5 rounded bg-danger/20 text-danger hover:bg-danger/30 transition-colors disabled:opacity-50"
                               disabled={unjailing === val.operator_address}
                               onClick={() => handleUnjail(val.operator_address!)}
+                              title="Signer must be this validator's operator"
                             >
                               {unjailing === val.operator_address ? "Unjailing…" : "Unjail"}
                             </button>
