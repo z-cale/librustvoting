@@ -32,7 +32,7 @@ ZALLY_MONIKER=my-validator \
 3. Fetches `genesis.json` from the discovered validator's `/zally/v1/genesis` endpoint
 4. Fetches the validator's P2P node identity from `/cosmos/base/tendermint/v1beta1/node_info`
 5. Initializes the node, generates keys, configures CometBFT with the discovered peer
-6. Produces `~/.zallyd/start.sh` for starting the node
+6. Starts the node, waits for sync, waits for funding, and registers as validator
 
 #### Optional env vars
 
@@ -43,49 +43,25 @@ ZALLY_MONIKER=my-validator \
 | `ZALLY_HOME` | `~/.zallyd` | Node home directory |
 | `VOTING_CONFIG_URL` | `https://zally-phi.vercel.app` | Vercel app URL for network discovery |
 
-When `join.sh` finishes it prints your validator address. Save it for Step 2.
-
-### Step 2 — Fund your account
-
-Your account must hold stake before it can register as a validator. Ask the bootstrap operator to fund your address using the **admin UI** (Validators → Fund validator).
-
-### Step 3 — Start the node
-
-```bash
-~/.zallyd/start.sh
-```
-
-This starts zallyd, waits for sync, and registers you as a validator automatically.
+After initialization, `join.sh` starts the node, syncs, and waits for funding. Ask the bootstrap operator to fund your address using the **admin UI** (Validators → Fund validator). Once funded, the script automatically registers you as a validator.
 
 ---
 
 ## Path B — Source (has repo, uses mise)
 
-### Step 1 — Build and join
-
 ```bash
 cd zally
 mise install              # pin Go/Rust/Node versions
-mise run validator:join    # builds from source, discovers network, generates start.sh
+mise run validator:join    # builds from source, discovers network, joins
 ```
 
-This runs `mise run build:install` (builds `zallyd` + `create-val-tx` from source), then `join.sh` which detects the local binaries, fetches the network config via Vercel, and produces `~/.zallyd/start.sh`.
-
-### Step 2 — Fund your account
-
-Same as Path A — ask the bootstrap operator to fund your address in the admin UI.
-
-### Step 3 — Start the node
-
-```bash
-~/.zallyd/start.sh
-```
+This runs `mise run build:install` (builds `zallyd` + `create-val-tx` from source), then `join.sh` which detects the local binaries, fetches the network config via Vercel, starts the node, and registers as a validator once funded.
 
 ---
 
 ## Verify
 
-Once `start.sh` reports "Validator registered", confirm you appear in the validator set:
+Once `join.sh` reports "Validator registered", confirm you appear in the validator set:
 
 ```bash
 zallyd query staking validators --node tcp://localhost:26657
@@ -118,7 +94,7 @@ tail -f ~/.zallyd/node.log
 pkill zallyd
 
 # Restart the node (after stopping)
-~/.zallyd/start.sh
+zallyd start --home ~/.zallyd
 ```
 
 ## Chain info

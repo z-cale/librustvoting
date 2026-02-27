@@ -150,7 +150,7 @@ curl -fsSL https://vote.fra1.digitaloceanspaces.com/join.sh | bash
 After they run `join.sh` and report their address:
 
 1. Fund their account via the admin UI (send stake tokens)
-2. They run the generated `start.sh` which syncs and auto-registers
+2. `join.sh` detects the funding and auto-registers them as a validator
 
 Verify new validators appear:
 

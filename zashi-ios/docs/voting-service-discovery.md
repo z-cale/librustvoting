@@ -38,7 +38,7 @@ Validators can register their URL with a single command via `join.sh`. The regis
 
 **Phase 1 (not yet bonded):** `join.sh` signs a registration payload with the validator's operator key and POSTs it to `/api/register-validator`. Since the validator isn't bonded yet, the entry goes into a `pending-registrations` queue (7-day expiry). The vote-manager sees pending registrations in the admin UI and clicks "Approve & Fund" to move the URL to `vote_servers` and send stake in one action.
 
-**Phase 2 (bonded):** After `start.sh` registers the validator on-chain (via `create-val-tx`), it re-registers with the same endpoint. This time the edge function detects the validator is bonded and promotes the URL directly to `vote_servers` — no admin approval needed.
+**Phase 2 (bonded):** After `join.sh` registers the validator on-chain (via `create-val-tx`), it re-registers with the same endpoint. This time the edge function detects the validator is bonded and promotes the URL directly to `vote_servers` — no admin approval needed.
 
 Both phases use the same endpoint (`POST /api/register-validator`) and the same ADR-036 amino signature format. The edge function decides the path based on on-chain bonding status.
 
