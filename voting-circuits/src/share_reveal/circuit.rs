@@ -310,6 +310,12 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         });
 
         // Share commitment multiplexer gate (condition 4).
+        // Col →  [0]       [1]       [2]        [3]        [4]        [5]        [6]       [7]       [8]       [9]
+        // ------+---------+---------+----------+----------+----------+----------+---------+---------+---------+---------
+        // Row 0 | sel[0]  | sel[1]  | sel[2]   | sel[3]   | sel[4]   | sel[5]   | sel[6]  | sel[7]  | sel[8]  | sel[9]
+        // Row 1 | sel[10] | sel[11] | sel[12]  | sel[13]  | sel[14]  | sel[15]  | comm[0] | comm[1] | comm[2] | comm[3]
+        // Row 2 | comm[4] | comm[5] | comm[6]  | comm[7]  | comm[8]  | comm[9]  | comm[10]| comm[11]| comm[12]| comm[13]
+        // Row 3 | comm[14]| comm[15]| sel_comm | share_idx| —        | —        | —       | —       | —       | —
         let q_share_comm_mux = meta.selector();
         meta.create_gate("share commitment multiplexer", |meta| {
             let q = meta.query_selector(q_share_comm_mux);
@@ -362,23 +368,33 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 .map(|i| ("bool sel_i", bool_check(sel[i].clone())))
                 .collect();
 
+            // Sum check for selectors (only one is 1)
             let sum_expr = sel.iter().skip(1).fold(sel[0].clone(), |acc, s| acc + s.clone());
             let sum_check = ("sum sel == 1", sum_expr - one);
 
             // Index reconstruction: share_index == sum(i * sel[i]).
             //
             // Given bool + sum guarantees exactly one sel[j] = 1, the sum collapses
-            // to j, so this single constraint.
+            // to j.
             let reconstructed = sel.iter().enumerate().skip(1).fold(
                 Expression::Constant(pallas::Base::zero()),
                 |acc, (i, s)| acc + Expression::Constant(pallas::Base::from(i as u64)) * s.clone(),
             );
             let index_reconstruct = ("index reconstruct", share_index.clone() - reconstructed);
 
+            // Selected commitment must equal the dot product:
+            // selected_comm == Σ sel[i] * comm[i]
             let comm_mux_expr = comm.iter().zip(sel.iter())
                 .fold(selected_comm, |acc, (c, s)| acc - s.clone() * c.clone());
             let comm_mux = ("comm mux", comm_mux_expr);
 
+            // What these four groups together guarantee:
+            // The bool + sum constraints establish one-hotness.
+            // Given one-hotness, the index reconstruction collapses to share_index == j where j is the unique set position.
+            // The mux constraint then collapses to selected_comm == comm[j].
+            // Combined with the constrain_equal(derived_comm, selected_comm), the full chain is:
+            // derived_comm  ==  comm[share_index]  ==  share_comms[share_index]
+            // The last equality is enforced by copy_advice.
             let mut constraints: Vec<(&'static str, Expression<pallas::Base>)> = bool_checks;
             constraints.push(sum_check);
             constraints.push(index_reconstruct);
@@ -562,6 +578,13 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         )?;
 
         // Mux share_comms by share_index → selected_comm.
+        //
+        // Col →  [0]       [1]       [2]        [3]        [4]        [5]        [6]       [7]       [8]       [9]
+        // ------+---------+---------+----------+----------+----------+----------+---------+---------+---------+---------
+        // Row 0 | sel[0]  | sel[1]  | sel[2]   | sel[3]   | sel[4]   | sel[5]   | sel[6]  | sel[7]  | sel[8]  | sel[9]
+        // Row 1 | sel[10] | sel[11] | sel[12]  | sel[13]  | sel[14]  | sel[15]  | comm[0] | comm[1] | comm[2] | comm[3]
+        // Row 2 | comm[4] | comm[5] | comm[6]  | comm[7]  | comm[8]  | comm[9]  | comm[10]| comm[11]| comm[12]| comm[13]
+        // Row 3 | comm[14]| comm[15]| sel_comm | share_idx| —        | —        | —       | —       | —       | —
         let selected_comm = layouter.assign_region(
             || "cond4: share commitment mux",
             |mut region| {
@@ -613,6 +636,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 }
 
                 // Select the correct commitment via dot product selector.
+                // selected_comm_val = Σ sel[i] * comm[i]
                 let selected_comm_val = (0..16).fold(Value::known(pallas::Base::zero()), |acc, i| {
                     acc.zip(sel_values[i]).zip(share_comms_cond4[i].value().copied())
                         .map(|((a, s), c)| a + s * c)
