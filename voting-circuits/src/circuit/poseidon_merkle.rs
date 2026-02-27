@@ -207,3 +207,266 @@ pub fn synthesize_poseidon_merkle_path<const DEPTH: usize>(
 
     Ok(current)
 }
+
+// ================================================================
+// Unit tests
+// ================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec::Vec;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        dev::MockProver,
+        plonk::{Circuit, ConstraintSystem, Fixed, Instance},
+    };
+
+    /// Out-of-circuit Poseidon hash matching the in-circuit `Poseidon(left, right)`.
+    fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
+        poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([a, b])
+    }
+
+    /// Computes a Merkle root out-of-circuit for test oracle comparison.
+    fn merkle_root(leaf: pallas::Base, position: u32, path: &[pallas::Base]) -> pallas::Base {
+        let mut current = leaf;
+        for (i, &sibling) in path.iter().enumerate() {
+            let (left, right) = if (position >> i) & 1 == 0 {
+                (current, sibling)
+            } else {
+                (sibling, current)
+            };
+            current = poseidon_hash_2(left, right);
+        }
+        current
+    }
+
+    // ----------------------------------------------------------------
+    // Minimal test circuit wrapping MerkleSwapGate + Poseidon path.
+    //
+    // Public instance layout: [expected_root].
+    // ----------------------------------------------------------------
+
+    const TEST_DEPTH: usize = 4;
+
+    #[derive(Clone, Debug)]
+    struct TestConfig {
+        swap_gate: MerkleSwapGate,
+        poseidon_config: PoseidonConfig<pallas::Base, 3, 2>,
+        primary: Column<Instance>,
+        advices: [Column<Advice>; 9],
+    }
+
+    #[derive(Clone)]
+    struct TestCircuit {
+        leaf: Value<pallas::Base>,
+        position: Value<u32>,
+        path: Value<[pallas::Base; TEST_DEPTH]>,
+    }
+
+    impl Default for TestCircuit {
+        fn default() -> Self {
+            Self {
+                leaf: Value::unknown(),
+                position: Value::unknown(),
+                path: Value::unknown(),
+            }
+        }
+    }
+
+    impl Circuit<pallas::Base> for TestCircuit {
+        type Config = TestConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<pallas::Base>) -> TestConfig {
+            let advices: [Column<Advice>; 9] = core::array::from_fn(|_| {
+                let col = meta.advice_column();
+                meta.enable_equality(col);
+                col
+            });
+
+            let primary = meta.instance_column();
+            meta.enable_equality(primary);
+
+            let lagrange_coeffs: [Column<Fixed>; 8] =
+                core::array::from_fn(|_| meta.fixed_column());
+            meta.enable_constant(lagrange_coeffs[0]);
+
+            let rc_a = lagrange_coeffs[2..5].try_into().unwrap();
+            let rc_b = lagrange_coeffs[5..8].try_into().unwrap();
+
+            let poseidon_config = PoseidonChip::configure::<poseidon::P128Pow5T3>(
+                meta,
+                advices[6..9].try_into().unwrap(),
+                advices[5],
+                rc_a,
+                rc_b,
+            );
+
+            let swap_gate = MerkleSwapGate::configure(
+                meta,
+                [advices[0], advices[1], advices[2], advices[3], advices[4]],
+            );
+
+            TestConfig {
+                swap_gate,
+                poseidon_config,
+                primary,
+                advices,
+            }
+        }
+
+        fn synthesize(
+            &self,
+            config: TestConfig,
+            mut layouter: impl Layouter<pallas::Base>,
+        ) -> Result<(), plonk::Error> {
+            let leaf = assign_free_advice(
+                layouter.namespace(|| "leaf"),
+                config.advices[0],
+                self.leaf,
+            )?;
+
+            let root = synthesize_poseidon_merkle_path::<TEST_DEPTH>(
+                &config.swap_gate,
+                &config.poseidon_config,
+                &mut layouter,
+                config.advices[0],
+                leaf,
+                self.position,
+                self.path,
+                "test merkle",
+            )?;
+
+            layouter.constrain_instance(root.cell(), config.primary, 0)?;
+            Ok(())
+        }
+    }
+
+    fn run_merkle(
+        leaf: pallas::Base,
+        position: u32,
+        path: [pallas::Base; TEST_DEPTH],
+        expected_root: pallas::Base,
+    ) -> Result<(), Vec<halo2_proofs::dev::VerifyFailure>> {
+        let circuit = TestCircuit {
+            leaf: Value::known(leaf),
+            position: Value::known(position),
+            path: Value::known(path),
+        };
+        let prover = MockProver::run(11, &circuit, vec![vec![expected_root]]).unwrap();
+        prover.verify()
+    }
+
+    #[test]
+    fn position_zero_valid() {
+        let leaf = pallas::Base::from(42u64);
+        let path = [
+            pallas::Base::from(1u64),
+            pallas::Base::from(2u64),
+            pallas::Base::from(3u64),
+            pallas::Base::from(4u64),
+        ];
+        let root = merkle_root(leaf, 0, &path);
+        assert_eq!(run_merkle(leaf, 0, path, root), Ok(()));
+    }
+
+    #[test]
+    fn position_nonzero_valid() {
+        let leaf = pallas::Base::from(99u64);
+        let path = [
+            pallas::Base::from(10u64),
+            pallas::Base::from(20u64),
+            pallas::Base::from(30u64),
+            pallas::Base::from(40u64),
+        ];
+        // position=5 (binary 0101): swap at levels 0 and 2.
+        let root = merkle_root(leaf, 5, &path);
+        assert_eq!(run_merkle(leaf, 5, path, root), Ok(()));
+    }
+
+    #[test]
+    fn all_right_child_valid() {
+        let leaf = pallas::Base::from(7u64);
+        let path = [
+            pallas::Base::from(11u64),
+            pallas::Base::from(22u64),
+            pallas::Base::from(33u64),
+            pallas::Base::from(44u64),
+        ];
+        // position=0xF (binary 1111): swap at every level.
+        let root = merkle_root(leaf, 0xF, &path);
+        assert_eq!(run_merkle(leaf, 0xF, path, root), Ok(()));
+    }
+
+    #[test]
+    fn wrong_root_fails() {
+        let leaf = pallas::Base::from(42u64);
+        let path = [
+            pallas::Base::from(1u64),
+            pallas::Base::from(2u64),
+            pallas::Base::from(3u64),
+            pallas::Base::from(4u64),
+        ];
+        let wrong_root = pallas::Base::from(0xDEADu64);
+        assert!(
+            run_merkle(leaf, 0, path, wrong_root).is_err(),
+            "wrong root must fail",
+        );
+    }
+
+    #[test]
+    fn wrong_leaf_fails() {
+        let leaf = pallas::Base::from(42u64);
+        let path = [
+            pallas::Base::from(1u64),
+            pallas::Base::from(2u64),
+            pallas::Base::from(3u64),
+            pallas::Base::from(4u64),
+        ];
+        let correct_root = merkle_root(leaf, 0, &path);
+        let tampered_leaf = pallas::Base::from(43u64);
+        assert!(
+            run_merkle(tampered_leaf, 0, path, correct_root).is_err(),
+            "tampered leaf must fail",
+        );
+    }
+
+    #[test]
+    fn wrong_sibling_fails() {
+        let leaf = pallas::Base::from(42u64);
+        let path = [
+            pallas::Base::from(1u64),
+            pallas::Base::from(2u64),
+            pallas::Base::from(3u64),
+            pallas::Base::from(4u64),
+        ];
+        let correct_root = merkle_root(leaf, 0, &path);
+        let mut tampered_path = path;
+        tampered_path[2] = pallas::Base::from(999u64);
+        assert!(
+            run_merkle(leaf, 0, tampered_path, correct_root).is_err(),
+            "tampered sibling must fail",
+        );
+    }
+
+    #[test]
+    fn wrong_position_fails() {
+        let leaf = pallas::Base::from(42u64);
+        let path = [
+            pallas::Base::from(1u64),
+            pallas::Base::from(2u64),
+            pallas::Base::from(3u64),
+            pallas::Base::from(4u64),
+        ];
+        let root_at_pos_0 = merkle_root(leaf, 0, &path);
+        assert!(
+            run_merkle(leaf, 1, path, root_at_pos_0).is_err(),
+            "wrong position must produce different root",
+        );
+    }
+}
