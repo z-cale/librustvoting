@@ -201,15 +201,13 @@ export default async function handler(req: Request) {
 
   if (isBonded) {
     // Phase 2: Directly upsert into vote_servers.
+    // Both URL and operator_address are unique keys — evict any existing entry
+    // matching either field to prevent duplicates, then append the new entry.
     const entry: ServiceEntry = { url, label: moniker, operator_address };
-    const existingIdx = currentConfig.vote_servers.findIndex(
-      (s) => s.operator_address === operator_address,
+    currentConfig.vote_servers = currentConfig.vote_servers.filter(
+      (s) => s.url !== url && s.operator_address !== operator_address,
     );
-    if (existingIdx >= 0) {
-      currentConfig.vote_servers[existingIdx] = entry;
-    } else {
-      currentConfig.vote_servers.push(entry);
-    }
+    currentConfig.vote_servers.push(entry);
 
     try {
       const resp = await fetch(

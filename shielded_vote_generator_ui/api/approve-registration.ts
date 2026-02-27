@@ -235,15 +235,12 @@ export default async function handler(req: Request) {
     operator_address: entry.operator_address,
   };
 
-  // Upsert by operator_address.
-  const existingIdx = currentConfig.vote_servers.findIndex(
-    (s) => s.operator_address === entry.operator_address,
+  // Both URL and operator_address are unique keys — evict any existing entry
+  // matching either field to prevent duplicates, then append the new entry.
+  currentConfig.vote_servers = currentConfig.vote_servers.filter(
+    (s) => s.url !== entry.url && s.operator_address !== entry.operator_address,
   );
-  if (existingIdx >= 0) {
-    currentConfig.vote_servers[existingIdx] = serviceEntry;
-  } else {
-    currentConfig.vote_servers.push(serviceEntry);
-  }
+  currentConfig.vote_servers.push(serviceEntry);
 
   // 6. Atomic Edge Config PATCH with both keys.
   try {

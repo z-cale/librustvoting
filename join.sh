@@ -282,7 +282,7 @@ HELPERCFG
 echo "Node configured."
 
 # ─── TLS reverse proxy (Caddy) ──────────────────────────────────────────────
-# Sets up Caddy as a TLS reverse proxy in front of the chain REST API (port 1418).
+# Sets up Caddy as a TLS reverse proxy in front of the chain REST API (port 1317).
 # Caddy auto-provisions Let's Encrypt certificates.
 
 echo ""
@@ -332,15 +332,15 @@ fi
 
 if [ -n "$VALIDATOR_URL" ] && command -v caddy > /dev/null 2>&1; then
   # Write Caddyfile.
-  echo "Configuring Caddy for ${ZALLY_DOMAIN} → localhost:1418..."
+  echo "Configuring Caddy for ${ZALLY_DOMAIN} → localhost:1317..."
   sudo tee /etc/caddy/Caddyfile > /dev/null <<CADDYEOF
 ${ZALLY_DOMAIN} {
-    reverse_proxy localhost:1418
+    reverse_proxy localhost:1317
 }
 CADDYEOF
 
   sudo systemctl restart caddy 2>/dev/null || sudo caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
-  echo "Caddy configured: ${VALIDATOR_URL} → localhost:1418"
+  echo "Caddy configured: ${VALIDATOR_URL} → localhost:1317"
 else
   VALIDATOR_URL=""
 fi
