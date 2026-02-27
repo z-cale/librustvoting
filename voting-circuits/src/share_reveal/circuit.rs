@@ -66,7 +66,16 @@ use crate::shares_hash::{
 // Constants
 // ================================================================
 
-/// Circuit size (2^K rows). Same as ZKP #1 and ZKP #2.
+/// Circuit size (2^K rows).
+///
+/// K=14 (16,384 rows). `CircuitCost::measure` reports a floor-planner
+/// high-water mark of **1,592 rows** (9.7% of 16,384). The `V1` floor
+/// planner packs non-overlapping regions into the same row range across
+/// different columns. Minimum viable K is 11 (2,048 rows, 22% headroom),
+/// but K=14 is kept for consistency with ZKP #1 and ZKP #2.
+///
+/// Run the `row_budget` test to re-measure after circuit changes:
+///   `cargo test --features share-reveal row_budget -- --nocapture --ignored`
 pub const K: u32 = 14;
 
 // ================================================================
@@ -307,6 +316,18 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Merkle conditional swap gate (condition 1).
         // Identical to ZKP #2's q_merkle_swap gate.
+        //
+        // Col →  [0]       [1]       [2]       [3]       [4]
+        // -------+---------+---------+---------+---------+---------
+        // Row 0  | pos_bit | current | sibling | left    | right
+        //
+        // pos_bit = 0 → no swap:  left=current,  right=sibling
+        // pos_bit = 1 → swap:     left=sibling,  right=current
+        //
+        // Constraints:
+        //   "swap left"      left  = current + pos_bit*(sibling - current)
+        //   "swap right"     left + right = current + sibling
+        //   "bool pos_bit"   pos_bit*(1 - pos_bit) = 0
         let q_merkle_swap = meta.selector();
         meta.create_gate("Merkle conditional swap", |meta| {
             let q = meta.query_selector(q_merkle_swap);
@@ -728,8 +749,33 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //
         // MerklePath(vote_commitment, position, path) = vote_comm_tree_root
         //
-        // Poseidon-based Merkle path verification (24 levels). The hash
-        // is Poseidon(left, right) with no level tag, matching
+        // Algorithm (repeated 24 times, once per tree level i=0..23):
+        //
+        //   1. Extract pos_bit_i = (vote_comm_tree_position >> i) & 1
+        //      (LSB-first: level 0 is closest to the leaf).
+        //   2. Witness sibling_i = vote_comm_tree_path[i].
+        //   3. Conditional swap via q_merkle_swap:
+        //        pos_bit=0 → (left, right) = (current, sibling)  [no swap]
+        //        pos_bit=1 → (left, right) = (sibling, current)  [swap]
+        //   4. Hash: current = Poseidon(left, right)
+        //
+        //   After 24 rounds, current == vote_comm_tree_root.
+        //   The final value is equality-constrained to the public instance.
+        //
+        // Per-level row layout — 24 independent regions (i = 0..23),
+        // each laid out identically:
+        //
+        //   Region i, swap row (q_merkle_swap = 1):
+        //   Col →       [0]       [1]       [2]       [3]       [4]
+        //   ------------+---------+---------+---------+---------+--------
+        //   offset 0    | pos_bit | current | sibling | left    | right
+        //
+        //   Region i, Poseidon rows (PoseidonChip, ConstantLength<2>):
+        //   Col →       [5]            [6]      [7]      [8]
+        //   ------------+---------------+---------+---------+--------
+        //   offset 0..N | partial S-box | state_0 | state_1 | state_2
+        //
+        // Poseidon is Poseidon(left, right) with no level tag, matching
         // vote_commitment_tree::MerkleHashVote::combine.
         // ---------------------------------------------------------------
         {
@@ -1178,5 +1224,91 @@ mod tests {
         bytes[..tag.len()].copy_from_slice(tag);
         let server_tag = pallas::Base::from_repr(bytes).unwrap();
         assert_eq!(domain_tag_share_spend(), server_tag);
+    }
+
+    /// Measures actual rows used by the share-reveal circuit via `CircuitCost::measure`.
+    ///
+    /// `CircuitCost` runs the floor planner against the circuit and tracks the
+    /// highest row offset assigned in any column, giving the real "rows consumed"
+    /// number rather than the theoretical 2^K capacity.
+    ///
+    /// Run with:
+    ///   cargo test --features share-reveal row_budget -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn row_budget() {
+        use std::println;
+        use halo2_proofs::dev::CircuitCost;
+        use pasta_curves::vesta;
+
+        let (circuit, _) = make_test_data(0);
+
+        let cost = CircuitCost::<vesta::Point, _>::measure(K, &circuit);
+        let debug = alloc::format!("{cost:?}");
+
+        let extract = |field: &str| -> usize {
+            let prefix = alloc::format!("{field}: ");
+            debug.split(&prefix)
+                .nth(1)
+                .and_then(|s| s.split([',', ' ', '}']).next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        };
+
+        let max_rows         = extract("max_rows");
+        let max_advice_rows  = extract("max_advice_rows");
+        let max_fixed_rows   = extract("max_fixed_rows");
+        let total_available  = 1usize << K;
+
+        println!("=== share-reveal circuit row budget (K={K}) ===");
+        println!("  max_rows (floor-planner high-water mark): {max_rows}");
+        println!("  max_advice_rows:                          {max_advice_rows}");
+        println!("  max_fixed_rows:                           {max_fixed_rows}");
+        println!("  2^K  (total available rows):              {total_available}");
+        println!("  headroom:                                 {}", total_available.saturating_sub(max_rows));
+        println!("  utilisation:                              {:.1}%",
+            100.0 * max_rows as f64 / total_available as f64);
+        println!();
+        println!("  Full debug: {debug}");
+
+        // Witness-independence check: Circuit::default() (all unknowns)
+        // must produce exactly the same layout as the filled circuit.
+        let cost_default = CircuitCost::<vesta::Point, _>::measure(K, &Circuit::default());
+        let debug_default = alloc::format!("{cost_default:?}");
+        let max_rows_default = debug_default
+            .split("max_rows: ").nth(1)
+            .and_then(|s| s.split([',', ' ', '}']).next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        if max_rows_default == max_rows {
+            println!("  Witness-independence: PASS \
+                (Circuit::default() max_rows={max_rows_default} == filled max_rows={max_rows})");
+        } else {
+            println!("  Witness-independence: FAIL \
+                (Circuit::default() max_rows={max_rows_default} != filled max_rows={max_rows}) \
+                — row count depends on witness values!");
+        }
+
+        println!("  VOTE_COMM_TREE_DEPTH (circuit constant): {VOTE_COMM_TREE_DEPTH}");
+
+        // Minimum-K probe: find the smallest K at which MockProver passes.
+        for probe_k in 11u32..=K {
+            let (c, inst) = make_test_data(0);
+            match MockProver::run(probe_k, &c, vec![inst.to_halo2_instance()]) {
+                Err(_) => {
+                    println!("  K={probe_k}: not enough rows (synthesizer rejected)");
+                    continue;
+                }
+                Ok(p) => match p.verify() {
+                    Ok(()) => {
+                        println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
+                            1usize << probe_k,
+                            100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
+                        break;
+                    }
+                    Err(_) => println!("  K={probe_k}: too small"),
+                },
+            }
+        }
     }
 }
