@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_vote_commitment_hash_cross_validates_with_orchard() {
-        use orchard::vote_proof;
+        use voting_circuits::vote_proof;
 
         let voting_round_id = Fp::from(0xCAFEu64);
         let shares_hash = Fp::from(0xDEAD_BEEFu64);
@@ -126,6 +126,6 @@ mod tests {
 
     #[test]
     fn test_domain_vc_matches_orchard() {
-        assert_eq!(DOMAIN_VC, orchard::vote_proof::DOMAIN_VC);
+        assert_eq!(DOMAIN_VC, voting_circuits::vote_proof::DOMAIN_VC);
     }
 }

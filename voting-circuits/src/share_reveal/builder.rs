@@ -8,7 +8,7 @@
 use halo2_proofs::circuit::Value;
 use pasta_curves::pallas;
 
-use crate::shared_primitives::shares_hash::shares_hash_from_comms;
+use crate::shares_hash::shares_hash_from_comms;
 use crate::vote_proof::{
     poseidon_hash_2, vote_commitment_hash as compute_vote_commitment_hash, VOTE_COMM_TREE_DEPTH,
 };

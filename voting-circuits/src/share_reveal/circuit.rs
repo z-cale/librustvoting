@@ -57,7 +57,7 @@ use halo2_gadgets::{
 };
 
 use crate::vote_proof::{DOMAIN_VC, VOTE_COMM_TREE_DEPTH};
-use crate::shared_primitives::shares_hash::{
+use crate::shares_hash::{
     compute_shares_hash_from_comms_in_circuit,
     hash_share_commitment_in_circuit,
 };

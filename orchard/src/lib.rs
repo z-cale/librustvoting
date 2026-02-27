@@ -33,28 +33,21 @@ pub mod bundle;
 pub mod circuit;
 #[cfg(feature = "circuit")]
 pub mod shared_primitives;
-mod constants;
+#[allow(missing_docs)]
+pub mod constants;
 pub mod keys;
 pub mod note;
 pub mod note_encryption;
 pub mod pczt;
 pub mod primitives;
-mod spec;
+#[allow(missing_docs)]
+pub mod spec;
 pub mod tree;
 pub mod value;
 pub mod zip32;
 
 #[cfg(test)]
 mod test_vectors;
-
-#[cfg(feature = "delegation")]
-pub use crate::circuit::delegation;
-
-#[cfg(feature = "vote-proof")]
-pub use crate::circuit::vote_proof;
-
-#[cfg(feature = "share-reveal")]
-pub use crate::circuit::share_reveal;
 
 pub use action::Action;
 pub use address::Address;

@@ -1079,9 +1079,9 @@ pub fn build_share_reveal_test_data()
 
     // Compute share commitments and shares_hash.
     let share_comms: [pallas::Base; 16] = core::array::from_fn(|i| {
-        orchard::vote_proof::share_commitment(share_blinds[i], all_c1_x[i], all_c2_x[i])
+        voting_circuits::vote_proof::share_commitment(share_blinds[i], all_c1_x[i], all_c2_x[i])
     });
-    let shares_hash_fp = orchard::shared_primitives::shares_hash::shares_hash_from_comms(share_comms);
+    let shares_hash_fp = voting_circuits::shares_hash::shares_hash_from_comms(share_comms);
 
     // Compute vote_commitment.
     let voting_round_id = Option::from(pallas::Base::from_repr(round_id))

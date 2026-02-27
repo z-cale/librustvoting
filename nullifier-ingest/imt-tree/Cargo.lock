@@ -510,6 +510,7 @@ dependencies = [
  "pasta_curves",
  "rand",
  "rayon",
+ "voting-circuits",
 ]
 
 [[package]]
@@ -1144,6 +1145,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "voting-circuits"
+version = "0.1.0"
+dependencies = [
+ "ff",
+ "group",
+ "halo2_gadgets",
+ "halo2_poseidon",
+ "halo2_proofs",
+ "incrementalmerkletree",
+ "lazy_static",
+ "orchard",
+ "pasta_curves",
+ "rand",
+ "sinsemilla",
 ]
 
 [[package]]
