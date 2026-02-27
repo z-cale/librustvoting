@@ -157,13 +157,14 @@ mod tests {
 
     use ff::Field;
     use halo2_proofs::{
-        circuit::floor_planner,
+        circuit::{floor_planner, Value},
         dev::MockProver,
         plonk::{Advice, Column, ConstraintSystem, Fixed, Instance as InstanceColumn},
     };
     use rand::rngs::OsRng;
 
     use crate::circuit::vote_proof::circuit::{share_commitment, shares_hash};
+    use halo2_gadgets::poseidon::Pow5Config as PoseidonConfig;
 
     // ---------------------------------------------------------------
     // Shared minimal circuit config (Poseidon only, no ECC).
