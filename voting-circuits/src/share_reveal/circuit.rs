@@ -15,8 +15,14 @@
 //!   such that `share_comms[share_index] = Poseidon(blind, c1_x, c2_x)`,
 //!   binding the publicly revealed encrypted share to the committed set.
 //! - **Condition 5**: Share Nullifier Integrity — `share_nullifier` is
-//!   correctly derived via a 4-layer Poseidon chain that includes
-//!   `voting_round_id` to prevent cross-round replay.
+//!   correctly derived as
+//!   `Poseidon(domain_tag, vote_commitment, share_index, blind)`.
+//!   `blind` is the share commitment blinding factor — a secret known only
+//!   to the voter and helper server. Using the blind (rather than a
+//!   ciphertext coordinate) ensures the nullifier is not publicly derivable
+//!   from on-chain data, since ciphertext coordinates are posted as public
+//!   inputs alongside the proof. Round-binding is transitive through
+//!   `vote_commitment`, which already commits to `voting_round_id`.
 //!
 //! ## Privacy
 //!
@@ -113,7 +119,6 @@ const VOTING_ROUND_ID: usize = 6;
 /// Domain separator for share nullifiers, encoded as a Pallas base field element.
 ///
 /// `"share spend"` → 32-byte zero-padded array → `Fp::from_repr`.
-/// Must match `helper-server/src/nullifier.rs:25-31` byte-for-byte.
 pub fn domain_tag_share_spend() -> pallas::Base {
     use ff::PrimeField;
     let mut bytes = [0u8; 32];
@@ -126,29 +131,26 @@ pub fn domain_tag_share_spend() -> pallas::Base {
 /// Out-of-circuit share nullifier hash (condition 5).
 ///
 /// ```text
-/// share_nullifier = Poseidon(domain_tag, vote_commitment, share_index, c1_x, c2_x, voting_round_id)
+/// share_nullifier = Poseidon(domain_tag, vote_commitment, share_index, blind)
 /// ```
 ///
-/// Single `ConstantLength<6>` call (3 permutations at rate=2).
-/// The `voting_round_id` input binds the nullifier to a specific
-/// voting round, preventing cross-round proof replay (the commitment
-/// tree is global, not per-round).
-///
-/// Matches `helper-server/src/nullifier.rs::derive_share_nullifier`.
+/// Single `ConstantLength<4>` call (2 permutations at rate=2).
+/// `blind` is the share commitment blinding factor for this share index.
+/// Because blinds are never posted on-chain, the nullifier cannot be
+/// derived by an observer — even one who knows the vote commitment tree
+/// contents and the public ciphertext coordinates. Round-binding comes
+/// transitively through `vote_commitment`, which already commits to
+/// `voting_round_id` as one of its Poseidon inputs.
 pub fn share_nullifier_hash(
     vote_commitment: pallas::Base,
     share_index: pallas::Base,
-    c1_x: pallas::Base,
-    c2_x: pallas::Base,
-    voting_round_id: pallas::Base,
+    blind: pallas::Base,
 ) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init().hash([
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<4>, 3, 2>::init().hash([
         domain_tag_share_spend(),
         vote_commitment,
         share_index,
-        c1_x,
-        c2_x,
-        voting_round_id,
+        blind,
     ])
 }
 
@@ -446,6 +448,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             config.advices[0],
             self.primary_blind,
         )?;
+        let primary_blind_cond5 = primary_blind.clone();
 
         // Copy proposal_id and vote_decision from instance into advice.
         let proposal_id = layouter.assign_region(
@@ -475,8 +478,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         )?;
 
         // Copy voting_round_id from instance into advice.
-        // Used in condition 2 (vote commitment integrity) and condition 5
-        // (share nullifier integrity).
+        // Used in condition 2 (vote commitment integrity).
         let voting_round_id = layouter.assign_region(
             || "copy voting_round_id from instance",
             |mut region| {
@@ -489,8 +491,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )
             },
         )?;
-        let voting_round_id_cond2 = voting_round_id.clone();
-        let voting_round_id_cond5 = voting_round_id.clone();
+        let voting_round_id_cond2 = voting_round_id;
 
         // ---------------------------------------------------------------
         // Witness 16 share_comms as private advice cells.
@@ -553,7 +554,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )
             },
         )?;
-        let enc_c1_x_cond5 = enc_c1_x.clone();
 
         let enc_c2_x = layouter.assign_region(
             || "copy enc_share_c2_x from instance",
@@ -567,7 +567,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )
             },
         )?;
-        let enc_c2_x_cond5 = enc_c2_x.clone();
 
         // derive the commitment from primary blind
         let derived_comm = hash_share_commitment_in_circuit(
@@ -735,12 +734,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Condition 5: Share Nullifier Integrity.
         //
         // share_nullifier = Poseidon(domain_tag, vote_commitment, share_index,
-        //                            selected_c1, selected_c2, voting_round_id)
+        //                            blind)
         //
-        // Single ConstantLength<6> Poseidon hash (3 permutations at rate=2).
-        // The voting_round_id input binds the nullifier to the round,
-        // preventing cross-round proof replay (the commitment tree is global).
-        // Matches helper-server/src/nullifier.rs exactly.
+        // Single ConstantLength<4> Poseidon hash (2 permutations at rate=2).
+        // blind is the share commitment blinding factor — the secret that
+        // makes the nullifier non-derivable from public on-chain data.
+        // Unlike ciphertext coordinates (c1_x, c2_x), the blind is never
+        // posted on-chain, so an observer cannot enumerate vote commitments
+        // to link nullifiers to their source.
+        // Round-binding is transitive through vote_commitment, which already
+        // commits to voting_round_id as one of its Poseidon inputs.
         // ---------------------------------------------------------------
         {
             // "share spend" domain tag — constant-constrained so the
@@ -755,7 +758,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 pallas::Base,
                 _,
                 poseidon::P128Pow5T3,
-                ConstantLength<6>,
+                ConstantLength<4>,
                 3,
                 2,
             >::init(
@@ -763,9 +766,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 layouter.namespace(|| "cond5: share nullifier Poseidon init"),
             )?
             .hash(
-                layouter.namespace(|| "cond5: Poseidon(tag, vc, idx, c1, c2, round_id)"),
+                layouter.namespace(|| "cond5: Poseidon(tag, vc, idx, blind)"),
                 [domain_tag, vote_commitment_cond5, share_index_cond5,
-                 enc_c1_x_cond5, enc_c2_x_cond5, voting_round_id_cond5],
+                 primary_blind_cond5],
             )?;
 
             layouter.constrain_instance(
@@ -927,9 +930,7 @@ mod tests {
         let share_nullifier = share_nullifier_hash(
             vote_commitment,
             share_index_fp,
-            enc_c1_x[share_idx as usize],
-            enc_c2_x[share_idx as usize],
-            voting_round_id,
+            share_blinds[share_idx as usize],
         );
 
         let circuit = Circuit {
