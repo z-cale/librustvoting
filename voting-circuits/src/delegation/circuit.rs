@@ -125,7 +125,9 @@ const GOV_NULL_OFFSETS: [usize; 5] = [GOV_NULL_1, GOV_NULL_2, GOV_NULL_3, GOV_NU
 ///
 /// Represented as a 16-bit bitmask where each bit authorizes voting on the
 /// corresponding proposal (proposal ID = bit index from LSB).  Full authority
-/// is `2^16 - 1 = 65535`, meaning all 16 proposals are authorized.
+/// is `2^16 - 1 = 65535`. Only bits 1–15 correspond to usable proposals
+/// (proposal IDs are 1-indexed); bit 0 is the circuit's sentinel value,
+/// permanently set and never decremented.
 ///
 /// This constant is hashed into `van_comm` (condition 7) as a constant-
 /// constrained witness, baked into the verification key so a malicious prover

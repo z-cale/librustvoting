@@ -129,6 +129,21 @@ pub use vote_commitment::DOMAIN_VC;
 /// rejected by the non-zero gate in `AuthorityDecrementChip` (`q_cond_6`). This means a voting
 /// round supports at most 15 proposals, not 16.
 /// Spec: "The number of proposals for a polling session must be <= 16."
+///
+/// # Indexing Convention
+///
+/// `proposal_id` is **1-indexed** throughout the entire stack:
+///
+/// - **On-chain (`MsgCreateVotingSession`)**: proposals carry `Id = 1, 2, …, N`.
+/// - **On-chain (`ValidateProposalId`)**: rejects `proposal_id < 1`.
+/// - **Circuit (this file)**: `proposal_id` serves as the bit-position in the
+///   16-bit `proposal_authority` bitmask. The `proposal_id != 0` gate ensures
+///   bit 0 is never selected, so the effective bit range is `[1, 15]`.
+/// - **Client (`librustvoting::zkp2`)**: validates `proposal_id` in `[1, 15]`
+///   before building the proof.
+///
+/// Bit 0 of `proposal_authority` is always set (initial value `0xFFFF`) and
+/// never decremented, acting as a structural invariant rather than a usable slot.
 pub const MAX_PROPOSAL_ID: usize = 16;
 
 // ================================================================

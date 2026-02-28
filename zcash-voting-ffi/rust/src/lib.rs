@@ -807,6 +807,9 @@ impl VotingDatabase {
             .collect())
     }
 
+    /// Build a vote commitment (ZKP #2) for the given proposal.
+    ///
+    /// `proposal_id` is 1-indexed (matches on-chain proposal IDs). Valid range: 1–15.
     pub fn build_vote_commitment(
         &self,
         round_id: String,

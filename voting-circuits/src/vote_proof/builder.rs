@@ -141,7 +141,7 @@ fn random_valid_base_as_scalar(rng: &mut impl RngCore) -> pallas::Base {
 /// * `vote_comm_tree_position` - Leaf position of the VAN in the tree.
 /// * `anchor_height` - The block height at which the tree was snapshotted
 ///   (must match the on-chain commitment tree root).
-/// * `proposal_id` - Which proposal to vote on (0-indexed, must be < 16).
+/// * `proposal_id` - Which proposal to vote on (1-indexed, must be in [1, 15]).
 /// * `vote_decision` - The voter's choice.
 /// * `ea_pk` - Election authority public key (Pallas affine point from session).
 /// * `alpha_v` - Spend auth randomizer for the voting hotkey. The caller
