@@ -2,26 +2,32 @@ package helper
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"cosmossdk.io/log"
 	"golang.org/x/sync/errgroup"
 )
 
-// Processor is the background share processing loop. It periodically checks the
-// share queue for shares whose delay has elapsed, generates Merkle paths and ZKP #3
-// proofs, and submits MsgRevealShare to the chain.
+// Processor is the background share processing loop. It checks the share queue
+// at Poisson-distributed intervals (exponential inter-arrival times) for shares
+// whose delay has elapsed, generates Merkle paths and ZKP #3 proofs, and submits
+// MsgRevealShare to the chain. The random timing prevents an observer from
+// correlating submission patterns with share readiness.
 type Processor struct {
-	store         *ShareStore
-	tree          TreeReader
-	prover        ProofGenerator
-	submitter     *ChainSubmitter
-	logger        log.Logger
-	interval      time.Duration
-	// maxConcurrent bounds the number of shares processed in parallel.
+	store     *ShareStore
+	tree      TreeReader
+	prover    ProofGenerator
+	submitter *ChainSubmitter
+	logger    log.Logger
+	// meanInterval is the mean of the exponential distribution for the time
+	// between processing cycles. Submissions form a Poisson process.
+	meanInterval  time.Duration
 	maxConcurrent int
 }
 
@@ -32,7 +38,7 @@ func NewProcessor(
 	prover ProofGenerator,
 	submitter *ChainSubmitter,
 	logger log.Logger,
-	interval time.Duration,
+	meanInterval time.Duration,
 	maxConcurrent int,
 ) *Processor {
 	if maxConcurrent < 1 {
@@ -45,24 +51,51 @@ func NewProcessor(
 		prover:        prover,
 		submitter:     submitter,
 		logger:        logger,
-		interval:      interval,
+		meanInterval:  meanInterval,
 		maxConcurrent: maxConcurrent,
 	}
 }
 
 // Run starts the processing loop. Blocks until ctx is cancelled.
+// Wake-up intervals follow an exponential distribution so that share
+// submissions form a Poisson process, preventing timing correlation.
 func (p *Processor) Run(ctx context.Context) error {
-	ticker := time.NewTicker(p.interval)
-	defer ticker.Stop()
-
 	for {
+		delay := p.randomDelay()
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 			p.processBatch(ctx)
 		}
 	}
+}
+
+// exponentialDelay samples from Exp(1/mean) using crypto/rand for
+// unpredictable timing.
+func exponentialDelay(mean time.Duration) time.Duration {
+	if mean <= 0 {
+		return 0
+	}
+	var buf [8]byte
+	_, _ = rand.Read(buf[:])
+	u := (float64(binary.LittleEndian.Uint64(buf[:])) + 1.0) / (float64(1<<64) + 1.0)
+	delaySecs := -mean.Seconds() * math.Log(u)
+	return time.Duration(delaySecs * float64(time.Second))
+}
+
+// randomDelay samples from Exp(1/meanInterval) for inter-cycle timing.
+func (p *Processor) randomDelay() time.Duration {
+	return exponentialDelay(p.meanInterval)
+}
+
+// intraShareDelay samples from Exp(2/meanInterval) — half the mean of the
+// inter-cycle delay — adding jitter between individual share submissions
+// within a batch.
+func (p *Processor) intraShareDelay() time.Duration {
+	return exponentialDelay(p.meanInterval / 2)
 }
 
 // processBatch takes all ready shares and processes them.
@@ -88,6 +121,18 @@ func (p *Processor) processBatch(ctx context.Context) {
 			case <-gctx.Done():
 				return nil
 			default:
+			}
+
+			// Skip jitter if less than 60s remain before vote ends — submit immediately.
+			if share.VoteEndTime == 0 || time.Until(time.Unix(int64(share.VoteEndTime), 0)) > 60*time.Second {
+				delay := p.intraShareDelay()
+				timer := time.NewTimer(delay)
+				select {
+				case <-gctx.Done():
+					timer.Stop()
+					return nil
+				case <-timer.C:
+				}
 			}
 
 			if err := p.processShare(gctx, share); err != nil {

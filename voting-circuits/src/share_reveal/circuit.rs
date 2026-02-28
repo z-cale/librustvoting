@@ -39,7 +39,7 @@
 //!   S-box, \[6..8\] Poseidon state.
 //! - 8 fixed columns for Poseidon round constants + constants.
 //! - 1 instance column (7 public inputs).
-//! - K = 14 (16,384 rows).
+//! - K = 11 (2,048 rows).
 
 use alloc::vec::Vec;
 
@@ -61,6 +61,9 @@ use halo2_gadgets::{
     utilities::bool_check,
 };
 
+use orchard::circuit::gadget::assign_free_advice;
+
+use crate::circuit::poseidon_merkle::{MerkleSwapGate, synthesize_poseidon_merkle_path};
 use crate::circuit::vote_commitment;
 use crate::vote_proof::VOTE_COMM_TREE_DEPTH;
 use crate::shares_hash::{
@@ -72,8 +75,16 @@ use crate::shares_hash::{
 // Constants
 // ================================================================
 
-/// Circuit size (2^K rows). Same as ZKP #1 and ZKP #2.
-pub const K: u32 = 14;
+/// Circuit size (2^K rows).
+///
+/// K=11 (2,048 rows). `CircuitCost::measure` reports a floor-planner
+/// high-water mark of ~1,592 rows (78% of 2,048). The `V1` floor
+/// planner packs non-overlapping regions into the same row range across
+/// different columns.
+///
+/// Run the `row_budget` test to re-measure after circuit changes:
+///   `cargo test --features share-reveal row_budget -- --nocapture --ignored`
+pub const K: u32 = 11;
 
 // ================================================================
 // Public input offsets (7 field elements).
@@ -162,8 +173,8 @@ pub struct Config {
     advices: [Column<Advice>; 9],
     /// Poseidon hash chip configuration.
     poseidon_config: PoseidonConfig<pallas::Base, 3, 2>,
-    /// Selector for the Merkle conditional swap gate (condition 1).
-    q_merkle_swap: Selector,
+    /// Merkle conditional swap gate (condition 1).
+    merkle_swap: MerkleSwapGate,
     /// Selector for the share commitment multiplexer gate (condition 4).
     ///
     /// Fires on a 4-row block (9 advice columns, Rotation 0..3):
@@ -253,17 +264,6 @@ impl Default for Circuit {
     }
 }
 
-/// Loads a private witness value into a fresh advice cell.
-fn assign_free_advice(
-    mut layouter: impl Layouter<pallas::Base>,
-    column: Column<Advice>,
-    value: Value<pallas::Base>,
-) -> Result<AssignedCell<pallas::Base, pallas::Base>, plonk::Error> {
-    layouter.assign_region(
-        || "load private",
-        |mut region| region.assign_advice(|| "private input", column, 0, || value),
-    )
-}
 
 impl plonk::Circuit<pallas::Base> for Circuit {
     type Config = Config;
@@ -311,30 +311,10 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         );
 
         // Merkle conditional swap gate (condition 1).
-        // Identical to ZKP #2's q_merkle_swap gate.
-        let q_merkle_swap = meta.selector();
-        meta.create_gate("Merkle conditional swap", |meta| {
-            let q = meta.query_selector(q_merkle_swap);
-            let pos_bit = meta.query_advice(advices[0], Rotation::cur());
-            let current = meta.query_advice(advices[1], Rotation::cur());
-            let sibling = meta.query_advice(advices[2], Rotation::cur());
-            let left = meta.query_advice(advices[3], Rotation::cur());
-            let right = meta.query_advice(advices[4], Rotation::cur());
-
-            Constraints::with_selector(
-                q,
-                [
-                    (
-                        "swap left",
-                        left.clone()
-                            - current.clone()
-                            - pos_bit.clone() * (sibling.clone() - current.clone()),
-                    ),
-                    ("swap right", left + right - current - sibling),
-                    ("bool_check pos_bit", bool_check(pos_bit)),
-                ],
-            )
-        });
+        let merkle_swap = MerkleSwapGate::configure(
+            meta,
+            [advices[0], advices[1], advices[2], advices[3], advices[4]],
+        );
 
         // Share commitment multiplexer gate (condition 4).
         // Col →  [0]       [1]       [2]        [3]        [4]        [5]        [6]       [7]       [8]
@@ -434,7 +414,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             primary,
             advices,
             poseidon_config,
-            q_merkle_swap,
+            merkle_swap,
             q_share_comm_mux,
         }
     }
@@ -730,120 +710,24 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //
         // MerklePath(vote_commitment, position, path) = vote_comm_tree_root
         //
-        // Poseidon-based Merkle path verification (24 levels). The hash
-        // is Poseidon(left, right) with no level tag, matching
-        // vote_commitment_tree::MerkleHashVote::combine.
+        // 24-level Poseidon Merkle path (LSB-first position bits).
+        // Uses the shared poseidon_merkle gadget.
         // ---------------------------------------------------------------
         {
-            let mut current = vote_commitment;
-
-            for i in 0..VOTE_COMM_TREE_DEPTH {
-                // Witness position bit for this level.
-                let pos_bit = assign_free_advice(
-                    layouter.namespace(|| alloc::format!("cond1: merkle pos_bit {i}")),
-                    config.advices[0],
-                    self.vote_comm_tree_position
-                        .map(|p| pallas::Base::from(((p >> i) & 1) as u64)),
-                )?;
-
-                // Witness sibling hash at this level.
-                let sibling = assign_free_advice(
-                    layouter.namespace(|| alloc::format!("cond1: merkle sibling {i}")),
-                    config.advices[0],
-                    self.vote_comm_tree_path.map(|path| path[i]),
-                )?;
-
-                // Conditional swap: order (current, sibling) by position bit.
-                let (left, right) = layouter.assign_region(
-                    || alloc::format!("cond1: merkle swap level {i}"),
-                    |mut region| {
-                        config.q_merkle_swap.enable(&mut region, 0)?;
-
-                        let pos_bit_cell = pos_bit.copy_advice(
-                            || "pos_bit",
-                            &mut region,
-                            config.advices[0],
-                            0,
-                        )?;
-                        let current_cell = current.copy_advice(
-                            || "current",
-                            &mut region,
-                            config.advices[1],
-                            0,
-                        )?;
-                        let sibling_cell = sibling.copy_advice(
-                            || "sibling",
-                            &mut region,
-                            config.advices[2],
-                            0,
-                        )?;
-
-                        let left = region.assign_advice(
-                            || "left",
-                            config.advices[3],
-                            0,
-                            || {
-                                pos_bit_cell
-                                    .value()
-                                    .copied()
-                                    .zip(current_cell.value().copied())
-                                    .zip(sibling_cell.value().copied())
-                                    .map(|((bit, cur), sib)| {
-                                        if bit == pallas::Base::zero() {
-                                            cur
-                                        } else {
-                                            sib
-                                        }
-                                    })
-                            },
-                        )?;
-
-                        let right = region.assign_advice(
-                            || "right",
-                            config.advices[4],
-                            0,
-                            || {
-                                current_cell
-                                    .value()
-                                    .copied()
-                                    .zip(sibling_cell.value().copied())
-                                    .zip(left.value().copied())
-                                    .map(|((cur, sib), l)| cur + sib - l)
-                            },
-                        )?;
-
-                        Ok((left, right))
-                    },
-                )?;
-
-                // Hash parent = Poseidon(left, right).
-                let parent = {
-                    let hasher = PoseidonHash::<
-                        pallas::Base,
-                        _,
-                        poseidon::P128Pow5T3,
-                        ConstantLength<2>,
-                        3,
-                        2,
-                    >::init(
-                        config.poseidon_chip(),
-                        layouter
-                            .namespace(|| alloc::format!("cond1: merkle hash init level {i}")),
-                    )?;
-                    hasher.hash(
-                        layouter.namespace(|| {
-                            alloc::format!("cond1: Poseidon(left, right) level {i}")
-                        }),
-                        [left, right],
-                    )?
-                };
-
-                current = parent;
-            }
+            let root = synthesize_poseidon_merkle_path::<VOTE_COMM_TREE_DEPTH>(
+                &config.merkle_swap,
+                &config.poseidon_config,
+                &mut layouter,
+                config.advices[0],
+                vote_commitment,
+                self.vote_comm_tree_position,
+                self.vote_comm_tree_path,
+                "cond1: merkle",
+            )?;
 
             // Bind the computed Merkle root to the public input.
             layouter.constrain_instance(
-                current.cell(),
+                root.cell(),
                 config.primary,
                 VOTE_COMM_TREE_ROOT,
             )?;
@@ -1182,5 +1066,91 @@ mod tests {
         bytes[..tag.len()].copy_from_slice(tag);
         let server_tag = pallas::Base::from_repr(bytes).unwrap();
         assert_eq!(domain_tag_share_spend(), server_tag);
+    }
+
+    /// Measures actual rows used by the share-reveal circuit via `CircuitCost::measure`.
+    ///
+    /// `CircuitCost` runs the floor planner against the circuit and tracks the
+    /// highest row offset assigned in any column, giving the real "rows consumed"
+    /// number rather than the theoretical 2^K capacity.
+    ///
+    /// Run with:
+    ///   cargo test --features share-reveal row_budget -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn row_budget() {
+        use std::println;
+        use halo2_proofs::dev::CircuitCost;
+        use pasta_curves::vesta;
+
+        let (circuit, _) = make_test_data(0);
+
+        let cost = CircuitCost::<vesta::Point, _>::measure(K, &circuit);
+        let debug = alloc::format!("{cost:?}");
+
+        let extract = |field: &str| -> usize {
+            let prefix = alloc::format!("{field}: ");
+            debug.split(&prefix)
+                .nth(1)
+                .and_then(|s| s.split([',', ' ', '}']).next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        };
+
+        let max_rows         = extract("max_rows");
+        let max_advice_rows  = extract("max_advice_rows");
+        let max_fixed_rows   = extract("max_fixed_rows");
+        let total_available  = 1usize << K;
+
+        println!("=== share-reveal circuit row budget (K={K}) ===");
+        println!("  max_rows (floor-planner high-water mark): {max_rows}");
+        println!("  max_advice_rows:                          {max_advice_rows}");
+        println!("  max_fixed_rows:                           {max_fixed_rows}");
+        println!("  2^K  (total available rows):              {total_available}");
+        println!("  headroom:                                 {}", total_available.saturating_sub(max_rows));
+        println!("  utilisation:                              {:.1}%",
+            100.0 * max_rows as f64 / total_available as f64);
+        println!();
+        println!("  Full debug: {debug}");
+
+        // Witness-independence check: Circuit::default() (all unknowns)
+        // must produce exactly the same layout as the filled circuit.
+        let cost_default = CircuitCost::<vesta::Point, _>::measure(K, &Circuit::default());
+        let debug_default = alloc::format!("{cost_default:?}");
+        let max_rows_default = debug_default
+            .split("max_rows: ").nth(1)
+            .and_then(|s| s.split([',', ' ', '}']).next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        if max_rows_default == max_rows {
+            println!("  Witness-independence: PASS \
+                (Circuit::default() max_rows={max_rows_default} == filled max_rows={max_rows})");
+        } else {
+            println!("  Witness-independence: FAIL \
+                (Circuit::default() max_rows={max_rows_default} != filled max_rows={max_rows}) \
+                — row count depends on witness values!");
+        }
+
+        println!("  VOTE_COMM_TREE_DEPTH (circuit constant): {VOTE_COMM_TREE_DEPTH}");
+
+        // Minimum-K probe: find the smallest K at which MockProver passes.
+        for probe_k in 11u32..=K {
+            let (c, inst) = make_test_data(0);
+            match MockProver::run(probe_k, &c, vec![inst.to_halo2_instance()]) {
+                Err(_) => {
+                    println!("  K={probe_k}: not enough rows (synthesizer rejected)");
+                    continue;
+                }
+                Ok(p) => match p.verify() {
+                    Ok(()) => {
+                        println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
+                            1usize << probe_k,
+                            100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
+                        break;
+                    }
+                    Err(_) => println!("  K={probe_k}: too small"),
+                },
+            }
+        }
     }
 }
