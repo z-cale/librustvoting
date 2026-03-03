@@ -2356,7 +2356,7 @@ function FundValidatorModal({
   const [devKeyVisible, setDevKeyVisible] = useState(false);
   const [recipientAddress, setRecipientAddress] = useState("");
   const [addressError, setAddressError] = useState("");
-  const [amount, setAmount] = useState("1000000");
+  const [amount, setAmount] = useState("10000000");
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ success: boolean; txHash?: string; error?: string } | null>(null);
   const walletConnected = !!wallet.address;
@@ -2488,7 +2488,7 @@ function FundValidatorModal({
                     type="text"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value.trim())}
-                    placeholder="1000000"
+                    placeholder="10000000"
                     spellCheck={false}
                     autoComplete="off"
                     className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
