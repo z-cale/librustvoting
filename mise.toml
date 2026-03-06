@@ -3,7 +3,7 @@
 # Then: mise install && mise start
 
 [tools]
-go = "1.24.1"
+go = "1.24.3"
 rust = "stable"
 node = "22"
 buf = "latest"
@@ -101,6 +101,10 @@ run = "npm run build"
 [tasks."chain:init"]
 description = "Wipe and reinitialize a single-validator chain"
 run = "make -C sdk init"
+
+[tasks."chain:init-benchmark"]
+description = "Wipe and reinitialize a single-validator benchmark chain"
+run = "make -C sdk init-benchmark"
 
 [tasks."chain:start"]
 description = "Start chain daemon (foreground)"
