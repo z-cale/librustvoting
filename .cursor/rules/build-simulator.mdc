@@ -1,0 +1,53 @@
+---
+description: Build and run Zashi iOS app on the iPhone 16 Pro simulator
+alwaysApply: false
+---
+
+# Building Zashi for the iOS Simulator
+
+## Booted Simulator
+
+**iPhone 16 Pro** — device ID: `E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB`
+
+If it's Shutdown, boot it first:
+```bash
+xcrun simctl boot E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB && open -a Simulator
+```
+
+## Build Command
+
+Always set `FX_ENABLE_GLASS=0` — Flexa 1.1.4 enables iOS 26 glass UI by default, which fails to compile on Xcode 16.
+
+```bash
+cd /Users/roman/projects/zally/zashi-ios && FX_ENABLE_GLASS=0 xcodebuild \
+  -scheme secant-mainnet \
+  -destination 'id=E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB' \
+  -configuration Debug \
+  build 2>&1
+```
+
+Build takes ~2min (incremental) after the first full build.
+
+## Install & Launch
+
+Bundle ID: `co.valargroup.secant-mainnet`
+
+```bash
+xcrun simctl install E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB \
+  "/Users/roman/Library/Developer/Xcode/DerivedData/secant-cxtkthuvtjsyjbggllztalvjlqmb/Build/Products/Debug-iphonesimulator/secant-mainnet.app"
+
+xcrun simctl launch E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB co.valargroup.secant-mainnet
+```
+
+## Terminate & Relaunch
+
+```bash
+xcrun simctl terminate E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB co.valargroup.secant-mainnet
+xcrun simctl launch E0BBD5AF-CC50-4A55-BC6A-1DEDF7646AEB co.valargroup.secant-mainnet
+```
+
+## Notes
+
+- `secant-mainnet` with `-configuration Debug` uses **mainnet** lightwalletd (`zec.rocks:443`). The scheme sets `SECANT_MAINNET` in `SWIFT_ACTIVE_COMPILATION_CONDITIONS`, and `TargetConstants.zcashNetwork` checks `#if SECANT_MAINNET` (not `#if DEBUG`). Do NOT use `-configuration Release` — the Debug build is correct and much faster.
+- The voting backend is controlled by `secant/Resources/voting-config-local.json` (bundled override, takes priority over CDN in Debug builds). Keep this pointed at `https://46-101-255-48.sslip.io` for remote testing, or `http://localhost:1318` for local chain.
+- If xcodebuild hangs at "Resolve Package Graph" for >2min, kill it (`pkill -f xcodebuild`) and retry — a previous build process likely left a lock.
