@@ -436,13 +436,14 @@ extension VotingAPIClient: DependencyKey {
                 }
             },
             delegateShares: { payloads, roundIdHex in
-                // Anti-censorship: send each share to a majority (floor(n/2)+1) of
-                // healthy helpers so no minority coalition can suppress a vote.
+                // Send each share to ceil(s/2) healthy helpers, balancing
+                // censorship resistance (redundancy) against amount privacy
+                // (limiting servers that see each share's ciphertext).
                 // The chain deduplicates via share nullifiers — only the first
                 // MsgRevealShare per nullifier is accepted.
                 let tracker = ServerHealthTracker.shared
-                let healthy = await tracker.healthyServers().shuffled()
-                let quorum = max(1, healthy.count / 2 + 1)
+                let healthy = await tracker.healthyServers()
+                let quorum = max(1, (healthy.count + 1) / 2)
 
                 var lastError: Error?
                 for (i, payload) in payloads.enumerated() {
@@ -462,9 +463,10 @@ extension VotingAPIClient: DependencyKey {
                         "primary_blind": payload.primaryBlind.base64EncodedString()
                     ]
 
-                    // Pick `quorum` distinct servers, rotating the start offset per
-                    // share so load is distributed evenly across helpers.
-                    let targets = (0..<quorum).map { j in healthy[(i + j) % healthy.count] }
+                    // Pick `quorum` distinct servers uniformly at random for each
+                    // share independently, so no single server sees a correlated
+                    // subset of the voter's shares.
+                    let targets = Array(healthy.shuffled().prefix(quorum))
 
                     // Send to all targets concurrently; the share is "delegated" if
                     // at least one server accepted it.
