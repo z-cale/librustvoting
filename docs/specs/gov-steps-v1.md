@@ -486,7 +486,7 @@ Each voting share `v_i` is encrypted under the election authority's public key `
 
 For each share `v_i` (where `i` ranges from 1 to 16):
 
-1. Derive deterministic randomness `r_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x00 || round_id || proposal_id_le64 || i)` reduced mod q_scalar. The domain byte `0x00` identifies El Gamal randomness. This allows the client to re-derive the same ciphertexts after a crash without persisting `r_i`.
+1. Derive deterministic randomness `r_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x00 || round_id || proposal_id_le64 || i)` reduced mod p_base. The domain byte `0x00` identifies El Gamal randomness. Since p_base < q_scalar on Pallas, `r_i` is always a valid scalar for El Gamal. This allows the client to re-derive the same ciphertexts after a crash without persisting `r_i`.
 2. Compute the El Gamal ciphertext: `enc_share_i = (r_i * G, v_i * G + r_i * ea_pk)`
 
 The ciphertext is a pair of curve points `(C1, C2)`.

@@ -153,9 +153,9 @@ fn vote_share_prf(
 
 /// Derive deterministic El Gamal randomness `r_i` for a share.
 ///
-/// Returns a `pallas::Base` element that is guaranteed to also be a valid
-/// `pallas::Scalar` (i.e. < q_scalar), since we first reduce mod q_scalar
-/// and q_scalar < q_base on the Pallas curve.
+/// Returns a `pallas::Base` element that is also a valid `pallas::Scalar`.
+/// We reduce mod p_base first; since p_base < q_scalar on the Pallas curve,
+/// every Base element is representable as a Scalar.
 pub fn derive_share_randomness(
     sk: &SpendingKey,
     round_id: pallas::Base,
@@ -163,8 +163,9 @@ pub fn derive_share_randomness(
     share_index: u8,
 ) -> pallas::Base {
     let hash = vote_share_prf(sk, DOMAIN_ELGAMAL, round_id, proposal_id, share_index);
-    let scalar = pallas::Scalar::from_uniform_bytes(&hash);
-    pallas::Base::from_repr(scalar.to_repr()).expect("scalar repr is always < base modulus")
+    let r = pallas::Base::from_uniform_bytes(&hash);
+    debug_assert!(base_to_scalar(r).is_some(), "p < q guarantees Base→Scalar");
+    r
 }
 
 /// Derive deterministic blind factor `blind_i` for a share commitment.
