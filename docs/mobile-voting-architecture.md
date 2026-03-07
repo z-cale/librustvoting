@@ -2,7 +2,7 @@
 
 Governance voting for Zashi iOS. The mobile client handles the full voter flow: delegation signing, ZKP generation, vote commitment, and share delegation to a helper server.
 
-See [Gov Steps V1](https://github.com/z-cale/shielded-vote/blob/main/docs/gov-steps-v1.md) for the cryptographic protocol spec. See the [Figma board](https://www.figma.com/board/CCKJMV6iozvYV8mT6H050a/Wallet-SDK-V2) for UI design.
+See [Gov Steps V1](https://github.com/valargroup/shielded-vote/blob/main/docs/gov-steps-v1.md) for the cryptographic protocol spec. See the [Figma board](https://www.figma.com/board/CCKJMV6iozvYV8mT6H050a/Wallet-SDK-V2) for UI design.
 
 ## System Context
 

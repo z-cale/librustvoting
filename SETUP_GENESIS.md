@@ -49,7 +49,7 @@ apt install -y build-essential
 The `svoted` binary must be built with the `halo2` and `redpallas` FFI tags, which requires the Rust circuits to be compiled first.
 
 ```bash
-git clone https://github.com/z-cale/shielded-vote
+git clone https://github.com/valargroup/shielded-vote
 cd shielded-vote
 mise run build:install   # builds Rust circuits, then: go install -tags "halo2,redpallas"
 ```
