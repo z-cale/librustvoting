@@ -1,6 +1,6 @@
 // Edge function for server heartbeat (registration + pulse).
 //
-// Called by each helper server on startup and every 30s thereafter.
+// Called by each helper server on startup and every 2 hours thereafter.
 // The server signs { operator_address, url, moniker, timestamp } with its
 // operator key (same ADR-036 format as register-validator).
 //
@@ -15,7 +15,7 @@
 //
 // Validators should call POST /api/register-validator on startup first
 // to ensure they are in approved-servers (via on-chain bonding check),
-// then pulse via this endpoint every 30s.
+// then pulse via this endpoint every 2 hours.
 //
 // Required env vars:
 //   VERCEL_API_TOKEN   — Vercel REST API token with Edge Config write access
@@ -32,7 +32,7 @@ export const config = { runtime: 'edge' };
 const BECH32_PREFIX = 'zvote';
 const TIMESTAMP_WINDOW_SECS = 300; // 5 minutes
 const PENDING_EXPIRY_SECS = 7 * 24 * 60 * 60; // 7 days
-const STALE_PULSE_SECS = 120; // 2 minutes — evict from vote_servers after this
+const STALE_PULSE_SECS = 21600; // 6 hours — evict from vote_servers after this (3× the 2-hour pulse interval)
 
 // -- Crypto helpers (duplicated — edge functions can't share modules) --
 
