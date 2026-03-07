@@ -12,6 +12,7 @@ pasta_curves = "0.5"
 ff = { version = "0.13", default-features = false }
 group = "0.13"
 rand = { version = "0.8", default-features = false }
+blake2b_simd = "1"
 poseidon = { package = "halo2_poseidon", version = "0.1" }
 incrementalmerkletree = "0.8.1"
 lazy_static = "1"

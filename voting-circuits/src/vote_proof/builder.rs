@@ -3,16 +3,19 @@
 //! Constructs a vote proof from delegation key material, a vote commitment
 //! tree witness, and vote parameters. Lives inside the orchard crate to
 //! access `pub(crate)` key internals.
+//!
+//! El Gamal encryption randomness and share blind factors are derived
+//! deterministically via a Blake2b-512 PRF keyed by the spending key,
+//! enabling crash recovery without persisting secrets.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use ff::{Field, PrimeField};
+use ff::{FromUniformBytes, PrimeField};
 use group::{Curve, GroupEncoding};
 use halo2_proofs::circuit::Value;
 use pasta_curves::{arithmetic::CurveAffine, pallas};
-use rand::RngCore;
 
 use orchard::keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey};
 
@@ -42,6 +45,7 @@ pub struct EncryptedShareOutput {
     /// Plaintext share value.
     pub plaintext_value: u64,
     /// El Gamal randomness r (32 bytes, LE pallas::Base repr).
+    /// Deterministically derived from (sk, round_id, proposal_id, share_index).
     pub randomness: [u8; 32],
 }
 
@@ -64,6 +68,7 @@ pub struct VoteProofBundle {
     pub shares_hash: pallas::Base,
     /// Per-share blind factors for blinded commitments.
     /// share_comm_i = Poseidon(blind_i, c1_i_x, c2_i_x).
+    /// Deterministically derived from (sk, round_id, proposal_id, share_index).
     pub share_blinds: [pallas::Base; 16],
     /// Pre-computed per-share Poseidon commitments.
     /// share_comm_i = Poseidon(blind_i, c1_i_x, c2_i_x).
@@ -112,14 +117,65 @@ fn extract_vsk(sk: &SpendingKey) -> pallas::Scalar {
     }
 }
 
-/// Generate a valid El Gamal randomness value (must be < scalar field modulus).
-fn random_valid_base_as_scalar(rng: &mut impl RngCore) -> pallas::Base {
-    loop {
-        let r = pallas::Base::random(&mut *rng);
-        if base_to_scalar(r).is_some() {
-            return r;
-        }
-    }
+/// Blake2b-512 personalization for vote share secret derivation.
+/// Distinct from Zcash's `"Zcash_ExpandSeed"` to avoid domain collisions.
+const VOTE_PRF_PERSONALIZATION: &[u8; 16] = b"ZcashVote_Expand";
+
+/// Domain separator for El Gamal encryption randomness.
+const DOMAIN_ELGAMAL: u8 = 0x00;
+/// Domain separator for share commitment blind factors.
+const DOMAIN_BLIND: u8 = 0x01;
+
+/// Core PRF: BLAKE2b-512 keyed by the spending key with voting-specific
+/// personalization and domain-separated inputs.
+///
+/// `PRF(sk, domain, round_id, proposal_id, share_index)`
+///   = BLAKE2b-512("ZcashVote_Expand", sk || domain || round_id || proposal_id_le64 || share_index_u8)
+fn vote_share_prf(
+    sk: &SpendingKey,
+    domain: u8,
+    round_id: pallas::Base,
+    proposal_id: u64,
+    share_index: u8,
+) -> [u8; 64] {
+    *blake2b_simd::Params::new()
+        .hash_length(64)
+        .personal(VOTE_PRF_PERSONALIZATION)
+        .to_state()
+        .update(sk.to_bytes())
+        .update(&[domain])
+        .update(&round_id.to_repr())
+        .update(&proposal_id.to_le_bytes())
+        .update(&[share_index])
+        .finalize()
+        .as_array()
+}
+
+/// Derive deterministic El Gamal randomness `r_i` for a share.
+///
+/// Returns a `pallas::Base` element that is guaranteed to also be a valid
+/// `pallas::Scalar` (i.e. < q_scalar), since we first reduce mod q_scalar
+/// and q_scalar < q_base on the Pallas curve.
+pub fn derive_share_randomness(
+    sk: &SpendingKey,
+    round_id: pallas::Base,
+    proposal_id: u64,
+    share_index: u8,
+) -> pallas::Base {
+    let hash = vote_share_prf(sk, DOMAIN_ELGAMAL, round_id, proposal_id, share_index);
+    let scalar = pallas::Scalar::from_uniform_bytes(&hash);
+    pallas::Base::from_repr(scalar.to_repr()).expect("scalar repr is always < base modulus")
+}
+
+/// Derive deterministic blind factor `blind_i` for a share commitment.
+pub fn derive_share_blind(
+    sk: &SpendingKey,
+    round_id: pallas::Base,
+    proposal_id: u64,
+    share_index: u8,
+) -> pallas::Base {
+    let hash = vote_share_prf(sk, DOMAIN_BLIND, round_id, proposal_id, share_index);
+    pallas::Base::from_uniform_bytes(&hash)
 }
 
 /// Build a real vote proof (ZKP #2) from delegation key material.
@@ -146,7 +202,11 @@ fn random_valid_base_as_scalar(rng: &mut impl RngCore) -> pallas::Base {
 /// * `ea_pk` - Election authority public key (Pallas affine point from session).
 /// * `alpha_v` - Spend auth randomizer for the voting hotkey. The caller
 ///   retains this to sign the sighash with `rsk_v = ask_v.randomize(&alpha_v)`.
-/// * `rng` - Random number generator for El Gamal encryption randomness.
+///
+/// El Gamal encryption randomness (`r_i`) and share blind factors (`blind_i`)
+/// are derived deterministically from `sk`, `voting_round_id`, `proposal_id`,
+/// and each share's index via a Blake2b-512 PRF. This allows the client to
+/// re-derive the same secrets after a crash without persisting them.
 ///
 /// **Expensive**: K=14 proof generation takes ~30-60 seconds in release mode.
 #[allow(clippy::too_many_arguments)]
@@ -164,7 +224,6 @@ pub fn build_vote_proof_from_delegation(
     ea_pk: pallas::Affine,
     alpha_v: pallas::Scalar,
     proposal_authority_old_u64: u64,
-    rng: &mut impl RngCore,
 ) -> Result<VoteProofBundle, VoteProofBuildError> {
     // ---- Key derivation (matches delegation's key hierarchy) ----
 
@@ -302,9 +361,9 @@ pub fn build_vote_proof_from_delegation(
     });
 
     for i in 0..16 {
-        let r = random_valid_base_as_scalar(rng);
+        let r = derive_share_randomness(sk, voting_round_id, proposal_id, i as u8);
         share_randomness[i] = r;
-        let r_scalar = base_to_scalar(r).expect("validated by random_valid_base_as_scalar");
+        let r_scalar = base_to_scalar(r).expect("derive_share_randomness guarantees scalar-range");
         let v_scalar = base_to_scalar(shares_base[i]).expect("share value in range");
 
         let c1_point = (g * r_scalar).to_affine();
@@ -318,7 +377,8 @@ pub fn build_vote_proof_from_delegation(
         enc_share_outputs[i].randomness = r.to_repr();
     }
 
-    let share_blinds: [pallas::Base; 16] = core::array::from_fn(|_| random_valid_base_as_scalar(rng));
+    let share_blinds: [pallas::Base; 16] =
+        core::array::from_fn(|i| derive_share_blind(sk, voting_round_id, proposal_id, i as u8));
     let share_comms: [pallas::Base; 16] = core::array::from_fn(|i| {
         share_commitment(share_blinds[i], enc_c1_x[i], enc_c2_x[i])
     });
@@ -434,4 +494,106 @@ pub fn build_vote_proof_from_delegation(
         share_blinds,
         share_comms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_sk() -> SpendingKey {
+        SpendingKey::from_bytes([0x42; 32]).expect("valid spending key")
+    }
+
+    fn test_round_id() -> pallas::Base {
+        pallas::Base::from(0xCAFE_u64)
+    }
+
+    #[test]
+    fn derive_share_randomness_is_deterministic() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let a = derive_share_randomness(&sk, round_id, 1, 0);
+        let b = derive_share_randomness(&sk, round_id, 1, 0);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn derive_share_blind_is_deterministic() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let a = derive_share_blind(&sk, round_id, 1, 0);
+        let b = derive_share_blind(&sk, round_id, 1, 0);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn derive_share_randomness_is_valid_scalar() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        for i in 0..16u8 {
+            let r = derive_share_randomness(&sk, round_id, 1, i);
+            assert!(
+                base_to_scalar(r).is_some(),
+                "r_{} must be convertible to scalar",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn different_share_index_gives_different_values() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let r0 = derive_share_randomness(&sk, round_id, 1, 0);
+        let r1 = derive_share_randomness(&sk, round_id, 1, 1);
+        assert_ne!(r0, r1);
+
+        let b0 = derive_share_blind(&sk, round_id, 1, 0);
+        let b1 = derive_share_blind(&sk, round_id, 1, 1);
+        assert_ne!(b0, b1);
+    }
+
+    #[test]
+    fn different_proposal_id_gives_different_values() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let r_p1 = derive_share_randomness(&sk, round_id, 1, 0);
+        let r_p2 = derive_share_randomness(&sk, round_id, 2, 0);
+        assert_ne!(r_p1, r_p2);
+    }
+
+    #[test]
+    fn different_round_id_gives_different_values() {
+        let sk = test_sk();
+        let r_a = derive_share_randomness(&sk, pallas::Base::from(1u64), 1, 0);
+        let r_b = derive_share_randomness(&sk, pallas::Base::from(2u64), 1, 0);
+        assert_ne!(r_a, r_b);
+    }
+
+    #[test]
+    fn randomness_and_blind_differ_for_same_inputs() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let r = derive_share_randomness(&sk, round_id, 1, 0);
+        let b = derive_share_blind(&sk, round_id, 1, 0);
+        assert_ne!(r, b, "domain separation must prevent r == blind");
+    }
+
+    #[test]
+    fn all_16_shares_are_distinct() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let randoms: Vec<_> = (0..16u8)
+            .map(|i| derive_share_randomness(&sk, round_id, 1, i))
+            .collect();
+        let blinds: Vec<_> = (0..16u8)
+            .map(|i| derive_share_blind(&sk, round_id, 1, i))
+            .collect();
+        for i in 0..16 {
+            for j in (i + 1)..16 {
+                assert_ne!(randoms[i], randoms[j], "r_{} == r_{}", i, j);
+                assert_ne!(blinds[i], blinds[j], "blind_{} == blind_{}", i, j);
+            }
+        }
+    }
 }
