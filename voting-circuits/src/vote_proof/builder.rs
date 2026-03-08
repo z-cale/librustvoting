@@ -5,8 +5,9 @@
 //! access `pub(crate)` key internals.
 //!
 //! El Gamal encryption randomness and share blind factors are derived
-//! deterministically via a Blake2b-512 PRF keyed by the spending key,
-//! enabling crash recovery without persisting secrets.
+//! deterministically via a Blake2b-512 PRF keyed by the spending key
+//! and bound to the specific VAN being spent, enabling crash recovery
+//! without persisting secrets and preventing nonce reuse across VANs.
 
 use alloc::format;
 use alloc::string::String;
@@ -45,7 +46,7 @@ pub struct EncryptedShareOutput {
     /// Plaintext share value.
     pub plaintext_value: u64,
     /// El Gamal randomness r (32 bytes, LE pallas::Base repr).
-    /// Deterministically derived from (sk, round_id, proposal_id, share_index).
+    /// Deterministically derived from (sk, round_id, proposal_id, van_commitment, share_index).
     pub randomness: [u8; 32],
 }
 
@@ -68,7 +69,7 @@ pub struct VoteProofBundle {
     pub shares_hash: pallas::Base,
     /// Per-share blind factors for blinded commitments.
     /// share_comm_i = Poseidon(blind_i, c1_i_x, c2_i_x).
-    /// Deterministically derived from (sk, round_id, proposal_id, share_index).
+    /// Deterministically derived from (sk, round_id, proposal_id, van_commitment, share_index).
     pub share_blinds: [pallas::Base; 16],
     /// Pre-computed per-share Poseidon commitments.
     /// share_comm_i = Poseidon(blind_i, c1_i_x, c2_i_x).
@@ -129,13 +130,19 @@ const DOMAIN_BLIND: u8 = 0x01;
 /// Core PRF: BLAKE2b-512 keyed by the spending key with voting-specific
 /// personalization and domain-separated inputs.
 ///
-/// `PRF(sk, domain, round_id, proposal_id, share_index)`
-///   = BLAKE2b-512("ZcashVote_Expand", sk || domain || round_id || proposal_id_le64 || share_index_u8)
+/// `PRF(sk, domain, round_id, proposal_id, van_commitment, share_index)`
+///   = BLAKE2b-512("ZcashVote_Expand", sk || domain || round_id || proposal_id_le64 || van_commitment || share_index_u8)
+///
+/// The `van_commitment` field binds the derivation to a specific VAN.
+/// Without it, a user with multiple VANs (from >5 notes in Phase 1)
+/// voting on the same proposal would derive identical El Gamal nonces,
+/// enabling a classic nonce-reuse attack on the ciphertexts.
 fn vote_share_prf(
     sk: &SpendingKey,
     domain: u8,
     round_id: pallas::Base,
     proposal_id: u64,
+    van_commitment: pallas::Base,
     share_index: u8,
 ) -> [u8; 64] {
     *blake2b_simd::Params::new()
@@ -146,6 +153,7 @@ fn vote_share_prf(
         .update(&[domain])
         .update(&round_id.to_repr())
         .update(&proposal_id.to_le_bytes())
+        .update(&van_commitment.to_repr())
         .update(&[share_index])
         .finalize()
         .as_array()
@@ -160,9 +168,10 @@ pub fn derive_share_randomness(
     sk: &SpendingKey,
     round_id: pallas::Base,
     proposal_id: u64,
+    van_commitment: pallas::Base,
     share_index: u8,
 ) -> pallas::Base {
-    let hash = vote_share_prf(sk, DOMAIN_ELGAMAL, round_id, proposal_id, share_index);
+    let hash = vote_share_prf(sk, DOMAIN_ELGAMAL, round_id, proposal_id, van_commitment, share_index);
     let r = pallas::Base::from_uniform_bytes(&hash);
     debug_assert!(base_to_scalar(r).is_some(), "p < q guarantees Base→Scalar");
     r
@@ -173,9 +182,10 @@ pub fn derive_share_blind(
     sk: &SpendingKey,
     round_id: pallas::Base,
     proposal_id: u64,
+    van_commitment: pallas::Base,
     share_index: u8,
 ) -> pallas::Base {
-    let hash = vote_share_prf(sk, DOMAIN_BLIND, round_id, proposal_id, share_index);
+    let hash = vote_share_prf(sk, DOMAIN_BLIND, round_id, proposal_id, van_commitment, share_index);
     pallas::Base::from_uniform_bytes(&hash)
 }
 
@@ -206,8 +216,11 @@ pub fn derive_share_blind(
 ///
 /// El Gamal encryption randomness (`r_i`) and share blind factors (`blind_i`)
 /// are derived deterministically from `sk`, `voting_round_id`, `proposal_id`,
-/// and each share's index via a Blake2b-512 PRF. This allows the client to
-/// re-derive the same secrets after a crash without persisting them.
+/// `vote_authority_note_old`, and each share's index via a Blake2b-512 PRF.
+/// Including the VAN commitment prevents nonce reuse when the same user has
+/// multiple VANs (from >5 notes in Phase 1) voting on the same proposal.
+/// This allows the client to re-derive the same secrets after a crash without
+/// persisting them.
 ///
 /// **Expensive**: K=14 proof generation takes ~30-60 seconds in release mode.
 #[allow(clippy::too_many_arguments)]
@@ -362,7 +375,7 @@ pub fn build_vote_proof_from_delegation(
     });
 
     for i in 0..16 {
-        let r = derive_share_randomness(sk, voting_round_id, proposal_id, i as u8);
+        let r = derive_share_randomness(sk, voting_round_id, proposal_id, vote_authority_note_old, i as u8);
         share_randomness[i] = r;
         let r_scalar = base_to_scalar(r).expect("derive_share_randomness guarantees scalar-range");
         let v_scalar = base_to_scalar(shares_base[i]).expect("share value in range");
@@ -379,7 +392,7 @@ pub fn build_vote_proof_from_delegation(
     }
 
     let share_blinds: [pallas::Base; 16] =
-        core::array::from_fn(|i| derive_share_blind(sk, voting_round_id, proposal_id, i as u8));
+        core::array::from_fn(|i| derive_share_blind(sk, voting_round_id, proposal_id, vote_authority_note_old, i as u8));
     let share_comms: [pallas::Base; 16] = core::array::from_fn(|i| {
         share_commitment(share_blinds[i], enc_c1_x[i], enc_c2_x[i])
     });
@@ -509,12 +522,17 @@ mod tests {
         pallas::Base::from(0xCAFE_u64)
     }
 
+    fn test_van() -> pallas::Base {
+        pallas::Base::from(0xDEAD_u64)
+    }
+
     #[test]
     fn derive_share_randomness_is_deterministic() {
         let sk = test_sk();
         let round_id = test_round_id();
-        let a = derive_share_randomness(&sk, round_id, 1, 0);
-        let b = derive_share_randomness(&sk, round_id, 1, 0);
+        let van = test_van();
+        let a = derive_share_randomness(&sk, round_id, 1, van, 0);
+        let b = derive_share_randomness(&sk, round_id, 1, van, 0);
         assert_eq!(a, b);
     }
 
@@ -522,8 +540,9 @@ mod tests {
     fn derive_share_blind_is_deterministic() {
         let sk = test_sk();
         let round_id = test_round_id();
-        let a = derive_share_blind(&sk, round_id, 1, 0);
-        let b = derive_share_blind(&sk, round_id, 1, 0);
+        let van = test_van();
+        let a = derive_share_blind(&sk, round_id, 1, van, 0);
+        let b = derive_share_blind(&sk, round_id, 1, van, 0);
         assert_eq!(a, b);
     }
 
@@ -531,8 +550,9 @@ mod tests {
     fn derive_share_randomness_is_valid_scalar() {
         let sk = test_sk();
         let round_id = test_round_id();
+        let van = test_van();
         for i in 0..16u8 {
-            let r = derive_share_randomness(&sk, round_id, 1, i);
+            let r = derive_share_randomness(&sk, round_id, 1, van, i);
             assert!(
                 base_to_scalar(r).is_some(),
                 "r_{} must be convertible to scalar",
@@ -545,12 +565,13 @@ mod tests {
     fn different_share_index_gives_different_values() {
         let sk = test_sk();
         let round_id = test_round_id();
-        let r0 = derive_share_randomness(&sk, round_id, 1, 0);
-        let r1 = derive_share_randomness(&sk, round_id, 1, 1);
+        let van = test_van();
+        let r0 = derive_share_randomness(&sk, round_id, 1, van, 0);
+        let r1 = derive_share_randomness(&sk, round_id, 1, van, 1);
         assert_ne!(r0, r1);
 
-        let b0 = derive_share_blind(&sk, round_id, 1, 0);
-        let b1 = derive_share_blind(&sk, round_id, 1, 1);
+        let b0 = derive_share_blind(&sk, round_id, 1, van, 0);
+        let b1 = derive_share_blind(&sk, round_id, 1, van, 1);
         assert_ne!(b0, b1);
     }
 
@@ -558,16 +579,18 @@ mod tests {
     fn different_proposal_id_gives_different_values() {
         let sk = test_sk();
         let round_id = test_round_id();
-        let r_p1 = derive_share_randomness(&sk, round_id, 1, 0);
-        let r_p2 = derive_share_randomness(&sk, round_id, 2, 0);
+        let van = test_van();
+        let r_p1 = derive_share_randomness(&sk, round_id, 1, van, 0);
+        let r_p2 = derive_share_randomness(&sk, round_id, 2, van, 0);
         assert_ne!(r_p1, r_p2);
     }
 
     #[test]
     fn different_round_id_gives_different_values() {
         let sk = test_sk();
-        let r_a = derive_share_randomness(&sk, pallas::Base::from(1u64), 1, 0);
-        let r_b = derive_share_randomness(&sk, pallas::Base::from(2u64), 1, 0);
+        let van = test_van();
+        let r_a = derive_share_randomness(&sk, pallas::Base::from(1u64), 1, van, 0);
+        let r_b = derive_share_randomness(&sk, pallas::Base::from(2u64), 1, van, 0);
         assert_ne!(r_a, r_b);
     }
 
@@ -575,8 +598,9 @@ mod tests {
     fn randomness_and_blind_differ_for_same_inputs() {
         let sk = test_sk();
         let round_id = test_round_id();
-        let r = derive_share_randomness(&sk, round_id, 1, 0);
-        let b = derive_share_blind(&sk, round_id, 1, 0);
+        let van = test_van();
+        let r = derive_share_randomness(&sk, round_id, 1, van, 0);
+        let b = derive_share_blind(&sk, round_id, 1, van, 0);
         assert_ne!(r, b, "domain separation must prevent r == blind");
     }
 
@@ -584,17 +608,35 @@ mod tests {
     fn all_16_shares_are_distinct() {
         let sk = test_sk();
         let round_id = test_round_id();
+        let van = test_van();
         let randoms: Vec<_> = (0..16u8)
-            .map(|i| derive_share_randomness(&sk, round_id, 1, i))
+            .map(|i| derive_share_randomness(&sk, round_id, 1, van, i))
             .collect();
         let blinds: Vec<_> = (0..16u8)
-            .map(|i| derive_share_blind(&sk, round_id, 1, i))
+            .map(|i| derive_share_blind(&sk, round_id, 1, van, i))
             .collect();
         for i in 0..16 {
             for j in (i + 1)..16 {
                 assert_ne!(randoms[i], randoms[j], "r_{} == r_{}", i, j);
                 assert_ne!(blinds[i], blinds[j], "blind_{} == blind_{}", i, j);
             }
+        }
+    }
+
+    #[test]
+    fn different_van_commitment_gives_different_values() {
+        let sk = test_sk();
+        let round_id = test_round_id();
+        let van_a = pallas::Base::from(0xAAAA_u64);
+        let van_b = pallas::Base::from(0xBBBB_u64);
+        for i in 0..16u8 {
+            let r_a = derive_share_randomness(&sk, round_id, 1, van_a, i);
+            let r_b = derive_share_randomness(&sk, round_id, 1, van_b, i);
+            assert_ne!(r_a, r_b, "r_{} must differ across VANs", i);
+
+            let b_a = derive_share_blind(&sk, round_id, 1, van_a, i);
+            let b_b = derive_share_blind(&sk, round_id, 1, van_b, i);
+            assert_ne!(b_a, b_b, "blind_{} must differ across VANs", i);
         }
     }
 }

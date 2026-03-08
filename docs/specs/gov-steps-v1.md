@@ -476,7 +476,7 @@ The approach below describes using a Merkle tree of blinded shares as a zero-kno
 
 The user would organize their voting shares into a vector of N entries. We associate a blinding factor with each entry. Then makes a merkle tree of N leaves, where each leaf is `voting_share || blinding factor`. The blinding factor per leaf is a standard trick to make a merkle tree a zero-knowledge vector commitment, preventing an adversary from brute forcing other components of the tree.
 
-Blind factors are derived deterministically: `blind_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x01 || round_id || proposal_id_le64 || i)` reduced mod p_base. The domain byte `0x01` identifies blind factors (vs `0x00` for El Gamal randomness), ensuring `blind_i != r_i` for the same inputs. The deterministic derivation allows crash recovery without persisting blind factors.
+Blind factors are derived deterministically: `blind_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x01 || round_id || proposal_id_le64 || van_commitment || i)` reduced mod p_base. The domain byte `0x01` identifies blind factors (vs `0x00` for El Gamal randomness), ensuring `blind_i != r_i` for the same inputs. The `van_commitment` field (the old VAN being spent) prevents nonce reuse when a user has multiple VANs from separate delegation bundles (>5 notes). The deterministic derivation allows crash recovery without persisting blind factors.
 
 TODO: Consider making this a 4 -> 1 tree to save on circuit prover time. (~40%)
 
@@ -486,7 +486,7 @@ Each voting share `v_i` is encrypted under the election authority's public key `
 
 For each share `v_i` (where `i` ranges from 1 to 16):
 
-1. Derive deterministic randomness `r_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x00 || round_id || proposal_id_le64 || i)` reduced mod p_base. The domain byte `0x00` identifies El Gamal randomness. Since p_base < q_scalar on Pallas, `r_i` is always a valid scalar for El Gamal. This allows the client to re-derive the same ciphertexts after a crash without persisting `r_i`.
+1. Derive deterministic randomness `r_i = BLAKE2b-512("ZcashVote_Expand", sk || 0x00 || round_id || proposal_id_le64 || van_commitment || i)` reduced mod p_base. The domain byte `0x00` identifies El Gamal randomness. Since p_base < q_scalar on Pallas, `r_i` is always a valid scalar for El Gamal. The `van_commitment` field (the old VAN being spent) prevents nonce reuse when a user has multiple VANs from separate delegation bundles (>5 notes). This allows the client to re-derive the same ciphertexts after a crash without persisting `r_i`.
 2. Compute the El Gamal ciphertext: `enc_share_i = (r_i * G, v_i * G + r_i * ea_pk)`
 
 The ciphertext is a pair of curve points `(C1, C2)`.
@@ -576,7 +576,7 @@ This ZKP proves that a registered voter is casting a valid vote, without reveali
 - `vote_authority_note_old` — the old VAN commitment
 - For the vote commitment:
   - `shares_1, ..., shares_16` — the voting share vector (each in `[0, 2^30)`; unused slots are 0)
-  - `r_1, ..., r_16` — El Gamal encryption randomness per share (deterministically derived from `sk`, `round_id`, `proposal_id`, and share index via a Blake2b-512 PRF)
+  - `r_1, ..., r_16` — El Gamal encryption randomness per share (deterministically derived from `sk`, `round_id`, `proposal_id`, `vote_authority_note_old`, and share index via a Blake2b-512 PRF)
   - `blind_1, ..., blind_16` — per-share blinding factors for the share commitments (deterministically derived from the same PRF with a different domain separator)
 
 **ZKP conditions:**
