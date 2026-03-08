@@ -240,9 +240,14 @@ curl -X POST https://<your-contrib-notifier>.vercel.app/api/reset
 #### Refresh (`POST /api/refresh`)
 
 Re-renders every tracked parent Slack message with the current config (mention
-targets, PR state) without deleting anything. Thread history is preserved. Use
-this after changing `SLACK_MENTION_IDS` and redeploying — it updates all
-existing messages in-place.
+targets, author Slack map, PR state) without deleting anything. Thread history
+is preserved.
+
+Normally you don't need to call this manually — the poll handler detects config
+changes automatically (it stores a hash of the rendering-relevant config in Edge
+Config and refreshes all parent messages on the first poll after a redeploy that
+changed `SLACK_MENTION_IDS`, `AUTHOR_SLACK_MAP`, or `SLACK_NOTIFIER_CHANNEL_ID`).
+The manual endpoint is still available if you want to force a refresh.
 
 ```bash
 curl -X POST https://<your-contrib-notifier>.vercel.app/api/refresh

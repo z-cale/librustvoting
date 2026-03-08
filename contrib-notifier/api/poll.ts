@@ -17,7 +17,7 @@
 // Required env vars: see _lib/config.ts
 
 import type { NotifierConfig } from './_lib/config';
-import { loadConfig } from './_lib/config';
+import { loadConfig, renderingConfigHash } from './_lib/config';
 import type { TrackedPR, NotifierState } from './_lib/store';
 import { loadState, saveState, prKey } from './_lib/store';
 import {
@@ -136,6 +136,42 @@ async function discover(
   }
 
   return changed;
+}
+
+// ---------- Phase 1.5: Auto-refresh on config change ----------
+
+async function autoRefresh(
+  cfg: NotifierConfig,
+  state: NotifierState,
+  log: string[],
+): Promise<boolean> {
+  const currentHash = renderingConfigHash(cfg);
+  if (state.configHash === currentHash) return false;
+  if (Object.keys(state.trackedPrs).length === 0) {
+    state.configHash = currentHash;
+    return true;
+  }
+
+  log.push(`Config changed (${state.configHash ?? 'none'} → ${currentHash}), refreshing parent messages`);
+
+  for (const [key, tracked] of Object.entries(state.trackedPrs)) {
+    if (cfg.dryRun) {
+      log.push(`[DRY RUN] Would refresh ${key}`);
+      continue;
+    }
+    const ok = await updateParentMessage(
+      cfg.slackBotToken,
+      cfg.slackChannelId,
+      tracked.slackThreadTs,
+      { ...tracked },
+      cfg.slackMentionIds,
+      cfg.authorSlackMap,
+    );
+    log.push(`${key}: ${ok ? 'refreshed' : 'refresh failed'}`);
+  }
+
+  state.configHash = currentHash;
+  return true;
 }
 
 // ---------- Phase 2: Event fetch for open PRs ----------
@@ -343,13 +379,14 @@ export default async function handler(req: Request) {
   const state = await loadState();
   const log: string[] = [];
 
+  const refreshChanged = await autoRefresh(cfg, state, log);
   const discoveryChanged = await discover(cfg, state, log);
   const eventsChanged = await fetchEvents(cfg, state, log);
   const reconcileChanged = await reconcile(cfg, state, log);
 
   state.lastDiscoveryPoll = new Date().toISOString();
 
-  if (discoveryChanged || eventsChanged || reconcileChanged) {
+  if (refreshChanged || discoveryChanged || eventsChanged || reconcileChanged) {
     try {
       await saveState(state, cfg.vercelApiToken, cfg.edgeConfigId);
     } catch (err) {
@@ -362,6 +399,7 @@ export default async function handler(req: Request) {
     status: 'ok',
     trackedOpen: Object.values(state.trackedPrs).filter((p) => p.state === 'open').length,
     trackedTotal: Object.keys(state.trackedPrs).length,
+    refreshed: refreshChanged,
     reconciled: reconcileChanged,
     log,
   });

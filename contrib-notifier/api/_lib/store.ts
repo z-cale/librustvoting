@@ -22,6 +22,7 @@ export interface NotifierState {
   trackedPrs: Record<string, TrackedPR>;
   lastDiscoveryPoll: string;
   lastReconcilePoll: string;
+  configHash?: string;
 }
 
 const EDGE_CONFIG_KEY = 'notifier-state';

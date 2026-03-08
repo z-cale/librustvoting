@@ -84,3 +84,24 @@ function parseAuthorSlackMap(s: string): Record<string, string> {
   }
   return map;
 }
+
+// Simple hash of the config fields that affect Slack message rendering.
+// When this changes between deploys, the poll handler auto-refreshes all
+// parent messages so no manual curl is needed.
+export function renderingConfigHash(cfg: NotifierConfig): string {
+  const parts = [
+    cfg.slackMentionIds.sort().join(','),
+    Object.entries(cfg.authorSlackMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}:${v}`)
+      .join(','),
+    cfg.slackChannelId,
+  ];
+  // djb2-style hash — lightweight, no crypto dependency needed in Edge runtime.
+  const str = parts.join('|');
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
