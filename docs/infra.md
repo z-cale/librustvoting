@@ -188,10 +188,11 @@ Greg: U0A8L9SA4QH
 
 Optional overrides (have sensible defaults):
 
-| Variable                 | Default                               |
-| ------------------------ | ------------------------------------- |
-| `TRACKED_GITHUB_AUTHORS` | `czarcas7ic,p0mvn,greg0x,ValarDragon` |
-| `TRACKED_REPO_OWNERS`    | `ZcashFoundation,zcash,zodl-inc`      |
+| Variable                 | Default                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------- |
+| `TRACKED_GITHUB_AUTHORS` | `czarcas7ic,p0mvn,greg0x,ValarDragon`                                                    |
+| `TRACKED_REPO_OWNERS`    | `ZcashFoundation,zcash,zodl-inc`                                                         |
+| `AUTHOR_SLACK_MAP`       | `czarcas7ic:U0A8B0NM744,p0mvn:U0A81KAPYMR,greg0x:U0A8L9SA4QH,ValarDragon:U0A7RS10AJ3`  |
 
 #### 8. Deploy to production
 
@@ -223,6 +224,29 @@ npx vercel --prod
 ```
 
 The next cron invocation will start posting to Slack for real.
+
+### Maintenance endpoints
+
+#### Reset (`POST /api/reset`)
+
+Deletes all bot messages from Slack and clears the tracking state. The next poll
+re-discovers all PRs and posts fresh messages. Use this when you need a clean
+slate (e.g. switching channels).
+
+```bash
+curl -X POST https://<your-contrib-notifier>.vercel.app/api/reset
+```
+
+#### Refresh (`POST /api/refresh`)
+
+Re-renders every tracked parent Slack message with the current config (mention
+targets, PR state) without deleting anything. Thread history is preserved. Use
+this after changing `SLACK_MENTION_IDS` and redeploying — it updates all
+existing messages in-place.
+
+```bash
+curl -X POST https://<your-contrib-notifier>.vercel.app/api/refresh
+```
 
 ### State
 

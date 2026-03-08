@@ -11,6 +11,7 @@
 //   TRACKED_GITHUB_AUTHORS     — comma-separated (default: czarcas7ic,p0mvn,greg0x,ValarDragon)
 //   TRACKED_REPO_OWNERS        — comma-separated (default: ZcashFoundation,zcash,zodl-inc)
 //   SLACK_MENTION_IDS          — comma-separated Slack user IDs to @-mention
+//   AUTHOR_SLACK_MAP           — github:slackId pairs (default: czarcas7ic:U0A8B0NM744,...)
 //   NOTIFIER_DRY_RUN           — "true" to log without posting to Slack
 
 export interface NotifierConfig {
@@ -19,6 +20,7 @@ export interface NotifierConfig {
   slackBotToken: string;
   slackChannelId: string;
   slackMentionIds: string[];
+  authorSlackMap: Record<string, string>;
   githubToken: string;
   vercelApiToken: string;
   edgeConfigId: string;
@@ -55,6 +57,10 @@ export function loadConfig(): NotifierConfig | { error: string } {
     slackBotToken: slackBotToken!,
     slackChannelId: slackChannelId!,
     slackMentionIds: splitCsv(process.env.SLACK_MENTION_IDS || ''),
+    authorSlackMap: parseAuthorSlackMap(
+      process.env.AUTHOR_SLACK_MAP ||
+        'czarcas7ic:U0A8B0NM744,p0mvn:U0A81KAPYMR,greg0x:U0A8L9SA4QH,ValarDragon:U0A7RS10AJ3',
+    ),
     githubToken: githubToken!,
     vercelApiToken: vercelApiToken!,
     edgeConfigId: edgeConfigId!,
@@ -68,4 +74,13 @@ function splitCsv(s: string): string[] {
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function parseAuthorSlackMap(s: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const pair of splitCsv(s)) {
+    const [gh, slack] = pair.split(':');
+    if (gh && slack) map[gh.toLowerCase()] = slack;
+  }
+  return map;
 }

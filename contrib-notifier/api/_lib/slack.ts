@@ -67,9 +67,15 @@ export function formatQuote(body: string, maxLen: number): string {
 
 // ---------- Parent message ----------
 
+function formatAuthor(author: string, authorSlackMap: Record<string, string>): string {
+  const slackId = authorSlackMap[author.toLowerCase()];
+  return slackId ? `<@${slackId}>` : `*${escapeSlack(author)}*`;
+}
+
 function parentBlocks(
   pr: { owner: string; repo: string; number: number; title: string; author: string; url: string; state: string },
   mentionIds: string[],
+  authorSlackMap: Record<string, string>,
 ): SlackBlock[] {
   const mentions = mentionIds.length > 0
     ? `\ncc ${mentionIds.map((id) => `<@${id}>`).join(' ')}`
@@ -81,7 +87,7 @@ function parentBlocks(
         type: 'mrkdwn',
         text:
           `${stateEmoji(pr.state)} *<${pr.url}|${pr.owner}/${pr.repo}#${pr.number}>*: ${escapeSlack(pr.title)}\n` +
-          `Author: *${escapeSlack(pr.author)}* · Status: *${pr.state}*${mentions}`,
+          `Author: ${formatAuthor(pr.author, authorSlackMap)} · Status: *${pr.state}*${mentions}`,
       },
     },
   ];
@@ -92,11 +98,12 @@ export async function postParentMessage(
   channel: string,
   pr: { owner: string; repo: string; number: number; title: string; author: string; url: string; state: string },
   mentionIds: string[],
+  authorSlackMap: Record<string, string> = {},
 ): Promise<string | null> {
   const result = await slackApi('chat.postMessage', token, {
     channel,
     text: `New PR: ${pr.owner}/${pr.repo}#${pr.number} – ${pr.title}`,
-    blocks: parentBlocks(pr, mentionIds),
+    blocks: parentBlocks(pr, mentionIds, authorSlackMap),
     unfurl_links: false,
     unfurl_media: false,
   });
@@ -109,12 +116,13 @@ export async function updateParentMessage(
   ts: string,
   pr: { owner: string; repo: string; number: number; title: string; author: string; url: string; state: string },
   mentionIds: string[],
+  authorSlackMap: Record<string, string> = {},
 ): Promise<boolean> {
   const result = await slackApi('chat.update', token, {
     channel,
     ts,
     text: `PR ${pr.state}: ${pr.owner}/${pr.repo}#${pr.number} – ${pr.title}`,
-    blocks: parentBlocks(pr, mentionIds),
+    blocks: parentBlocks(pr, mentionIds, authorSlackMap),
   });
   return result.ok;
 }

@@ -85,6 +85,7 @@ async function discover(
               existing.slackThreadTs,
               { ...existing },
               cfg.slackMentionIds,
+              cfg.authorSlackMap,
             );
             await postThreadReply(
               cfg.slackBotToken,
@@ -110,6 +111,7 @@ async function discover(
         cfg.slackChannelId,
         { owner, repo, number: pr.number, title: pr.title, author: pr.user.login, url: prUrl, state: 'open' },
         cfg.slackMentionIds,
+        cfg.authorSlackMap,
       );
 
       if (ts) {
@@ -315,6 +317,7 @@ async function handleStateTransition(
     tracked.slackThreadTs,
     { ...tracked },
     cfg.slackMentionIds,
+    cfg.authorSlackMap,
   );
   await postThreadReply(
     cfg.slackBotToken,
