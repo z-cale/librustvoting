@@ -116,9 +116,9 @@ The EA key ceremony is automatic per voting round. When a round is published, el
 
 ## Protocol Documentation
 
-When modifying circuit logic (in `orchard/`, `librustvoting/`, `sdk/circuits/`, or `vote-nullifier-pir`), the corresponding documentation in the `shielded_vote_book` must also be updated. The book is served live and describes the circuit structure — any protocol change that affects conditions, public inputs, witness fields, or hash parameters must be reflected there.
+**Never modify files in `shielded_vote_book/` unless the user explicitly asks you to.** This is a shared Obsidian vault published as a GitBook — unintended edits affect the whole team. If a code change requires a spec update, tell the user what needs to change and where, but do not write to the book unless instructed.
 
-**Keeping the index accurate:** `docs/shielded-vote-book-index.md` is a committed summary of the book's structure. When you read a file from `shielded_vote_book/` and notice it has moved, been renamed, has new files nearby that aren't in the index, or the content no longer matches the index summary — update the index immediately. Also update the index when writing to the book (new files, restructured sections, significantly changed content). The goal: a future query that reads only the index should get an accurate picture of what's in the book and where to find it.
+**Keeping the index accurate:** `docs/shielded-vote-book-index.md` is a committed summary of the book's structure. When you read a file from `shielded_vote_book/` and notice it has moved, been renamed, has new files nearby that aren't in the index, or the content no longer matches the index summary — update the index immediately. If the user asks you to write to the book, also update the index to reflect those changes. The goal: a future query that reads only the index should get an accurate picture of what's in the book and where to find it.
 
 ## Claude Code Workflow Rules
 

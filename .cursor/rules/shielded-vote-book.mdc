@@ -7,6 +7,10 @@ alwaysApply: true
 
 The canonical protocol specification lives in the `shielded_vote_book/` directory (symlinked from an external Obsidian vault). A committed index at `docs/shielded-vote-book-index.md` summarizes every file in the book.
 
+## Read-only by default
+
+**Never modify files in `shielded_vote_book/` unless the user explicitly asks you to.** This is a shared Obsidian vault published as a GitBook — unintended edits affect the whole team. Treat it as a read-only reference. If a code change requires a spec update, tell the user what needs to change and where, but do not write to the book unless instructed.
+
 ## Reading protocol docs
 
 1. Read `docs/shielded-vote-book-index.md` first to find the relevant file(s).
@@ -22,7 +26,7 @@ If you read a file from `shielded_vote_book/` and notice any of the following, u
 - A file's content no longer matches its index summary
 - Sections have been restructured
 
-Also update the index when writing to the book (new files, restructured sections, significantly changed content).
+If the user asks you to write to the book (new files, restructured sections, significantly changed content), also update the index to reflect those changes.
 
 ## If the symlink is missing
 
