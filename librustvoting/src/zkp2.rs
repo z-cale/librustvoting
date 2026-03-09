@@ -16,6 +16,12 @@ use crate::types::{
 /// The builder handles share decomposition and El Gamal encryption internally,
 /// ensuring the ciphertexts in the proof match those returned in `enc_shares`.
 ///
+/// Share encryption randomness and blind factors are derived deterministically
+/// from the spending key, round context, and VAN commitment, so the same call
+/// with the same inputs always produces the same encrypted shares and commitments.
+/// The VAN commitment binding prevents El Gamal nonce reuse when a user has
+/// multiple VANs from separate delegation bundles.
+///
 /// # Arguments
 ///
 /// * `hotkey_seed` - Seed bytes for the hotkey SpendingKey (from app secure storage).
@@ -119,10 +125,9 @@ pub fn build_vote_commitment(
 
     // Generate the real proof
     progress.on_progress(0.10);
-    let mut rng = rand::thread_rng();
     // Generate spend-auth randomizer for the voting key.
     // The caller will need alpha_v to sign the TX2 sighash with rsk_v = ask_v.randomize(&alpha_v).
-    let alpha_v = pallas::Scalar::random(&mut rng);
+    let alpha_v = pallas::Scalar::random(&mut rand::thread_rng());
     let vote_bundle = build_vote_proof_from_delegation(
         &sk,
         address_index,
@@ -137,7 +142,6 @@ pub fn build_vote_commitment(
         ea_pk_affine,
         alpha_v,
         proposal_authority,
-        &mut rng,
     )
     .map_err(|e| VotingError::ProofFailed {
         message: format!("vote proof generation failed: {}", e),

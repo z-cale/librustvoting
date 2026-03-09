@@ -410,8 +410,7 @@ fn generate_cast_vote(
         .try_into()
         .unwrap();
 
-    let mut rng = OsRng;
-    let alpha_v = pallas::Scalar::random(&mut rng);
+    let alpha_v = pallas::Scalar::random(&mut OsRng);
 
     let bundle = build_vote_proof_from_delegation(
         &sk,
@@ -427,7 +426,6 @@ fn generate_cast_vote(
         ea_pk,
         alpha_v,
         (1u64 << 16) - 1,
-        &mut rng,
     )
     .expect("cast-vote proof generation failed");
 
@@ -468,7 +466,7 @@ fn generate_cast_vote(
         out.copy_from_slice(h.as_bytes());
         out
     };
-    let sig = rsk.sign(&mut rng, &sighash);
+    let sig = rsk.sign(&mut OsRng, &sighash);
     let sig_bytes: [u8; 64] = (&sig).into();
 
     let payload = payloads::cast_vote_payload_real(
@@ -515,10 +513,10 @@ fn generate_cast_vote(
 #[test]
 #[ignore = "requires running chain + pre-generated fixtures"]
 fn voter_throughput_stress() {
-    let fixture_dir = resolve_voter_fixture_dir(PathBuf::from(
-        std::env::var("VOTER_FIXTURE_DIR").expect("VOTER_FIXTURE_DIR must be set"),
+    let fixture_dir = resolve_voter_fixture_dir(
+        PathBuf::from(std::env::var("VOTER_FIXTURE_DIR").expect("VOTER_FIXTURE_DIR must be set"))
+            .as_path(),
     )
-    .as_path())
     .expect("resolve fixture dir");
     let workers = concurrency();
     let timeout = phase_timeout();
@@ -784,7 +782,8 @@ fn voter_throughput_stress() {
     let mut voters_with_positions: Vec<(usize, u64)> = positions.into_iter().collect();
     voters_with_positions.sort_by_key(|(idx, _)| *idx);
 
-    let bundle_map: HashMap<usize, &CastVoteBundle> = cv_bundles.iter().map(|(idx, b)| (*idx, b)).collect();
+    let bundle_map: HashMap<usize, &CastVoteBundle> =
+        cv_bundles.iter().map(|(idx, b)| (*idx, b)).collect();
 
     let mut total_enqueued = 0usize;
     let mut wave_num = 0usize;
