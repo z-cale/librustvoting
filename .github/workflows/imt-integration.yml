@@ -21,11 +21,15 @@ jobs:
   test-imt-integration:
     name: IMT ZK Integration Tests
     runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Configure private repo access
+        run: git config --global url."https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
