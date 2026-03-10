@@ -14,17 +14,11 @@ resolver = "2"
 #   pub visibility for constants/spec + shared_primitives gadget).
 #   This ensures type compatibility with voting-circuits.
 #
-# librustzcash crates: use the maint/zcash_client_sqlite-0.19.x branch
-#   (orchard 0.11 compatible) with our governance visibility changes.
+# librustzcash crates: pczt + zcash_keys + zcash_protocol need our
+#   governance visibility changes (pub getters on PCZT types, etc.).
 [patch.crates-io]
 orchard = { git = "https://github.com/valargroup/voting-circuits.git" }
 
 pczt              = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
 zcash_keys        = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
 zcash_protocol    = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_address     = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_encoding    = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_transparent = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_client_sqlite  = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_client_backend = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_primitives  = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }

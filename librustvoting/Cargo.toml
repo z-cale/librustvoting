@@ -35,8 +35,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Error handling
 thiserror = "2"
 
-# Zcash / Orchard note reconstruction
-# Uses orchard 0.11 to match the wallet stack (zcash_keys, zcash_client_sqlite).
+# Zcash / Orchard
 subtle = "2.6"
 orchard = { version = "0.11" }
 voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git" }
@@ -44,14 +43,7 @@ zcash_keys = { version = "0.12", features = ["orchard"] }
 zcash_protocol = "0.7"
 nonempty = "0.11"
 zip32 = "0.2"
+incrementalmerkletree = "0.8"
 
 # PCZT construction (governance-specific PCZT for Keystone signing)
 pczt = { version = "0.5", features = ["orchard", "io-finalizer", "signer"] }
-
-# Tree witness generation
-zcash_client_sqlite = { version = "0.19", features = ["orchard"] }
-zcash_client_backend = { version = "0.21", features = ["orchard"] }
-zcash_primitives = "0.26"
-incrementalmerkletree = "0.8"
-shardtree = { version = "0.6", features = ["legacy-api"] }
-prost = "0.14"
