@@ -954,7 +954,7 @@ public struct Voting {
 
             case .verifyWitnesses:
                 guard let activeSession = state.activeSession else {
-                    state.witnessStatus = .failed("missing active session")
+                    state.witnessStatus = .failed(VotingErrorMapper.userFriendlyMessage(from: "missing active session"))
                     return .none
                 }
                 state.witnessTiming = nil
@@ -1080,7 +1080,7 @@ public struct Voting {
                 return .none
 
             case .witnessVerificationFailed(let error):
-                state.witnessStatus = .failed(error)
+                state.witnessStatus = .failed(VotingErrorMapper.userFriendlyMessage(from: error))
                 return .none
 
             // MARK: - Round Resume
