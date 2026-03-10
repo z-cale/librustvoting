@@ -6,10 +6,10 @@ Monorepo for the Zcash shielded voting system. Contains the vote chain (Cosmos S
 
 | Guide                                                    | Purpose                                                                                                          |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| [BOOTSTRAP.md](BOOTSTRAP.md)                             | End-to-end playbook for standing up a new network from scratch (infra, genesis, nullifiers, onboarding, release) |
-| [SETUP_GENESIS.md](SETUP_GENESIS.md)                     | Bootstrap the genesis validator — build the binary, initialise the chain, open P2P, and register in Edge Config  |
-| [SETUP_JOIN.md](SETUP_JOIN.md)                           | Join as a validator — self-registration, funding, and automatic on-chain registration via `join.sh`              |
-| [SETUP_NULLIFIER_SERVICE.md](SETUP_NULLIFIER_SERVICE.md) | Set up the nullifier service — install deps, bootstrap the snapshot, and start the exclusion proof query server  |
+| [BOOTSTRAP.md](docs/BOOTSTRAP.md)                             | End-to-end playbook for standing up a new network from scratch (infra, genesis, nullifiers, onboarding, release) |
+| [SETUP_GENESIS.md](docs/SETUP_GENESIS.md)                     | Bootstrap the genesis validator — build the binary, initialise the chain, open P2P, and register in Edge Config  |
+| [SETUP_JOIN.md](docs/SETUP_JOIN.md)                           | Join as a validator — self-registration, funding, and automatic on-chain registration via `join.sh`              |
+| [SETUP_NULLIFIER_SERVICE.md](docs/SETUP_NULLIFIER_SERVICE.md) | Set up the nullifier service — install deps, bootstrap the snapshot, and start the exclusion proof query server  |
 
 ## Architecture
 
