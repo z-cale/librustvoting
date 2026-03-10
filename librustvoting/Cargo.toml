@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # PIR (private nullifier exclusion proofs)
-pir-client = { git = "https://github.com/valargroup/vote-nullifier-pir.git" }
+pir-client = { git = "ssh://git@github.com/valargroup/vote-nullifier-pir.git", branch = "main" }
 
 # Vote commitment tree (VAN witness generation)
 vote-commitment-tree = { path = "../vote-commitment-tree" }
@@ -36,9 +36,10 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 thiserror = "2"
 
 # Zcash / Orchard note reconstruction
+# Uses orchard 0.11 to match the wallet stack (zcash_keys, zcash_client_sqlite).
 subtle = "2.6"
 orchard = { version = "0.11" }
-voting-circuits = { git = "https://github.com/z-cale/voting-circuits.git" }
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git" }
 zcash_keys = { version = "0.12", features = ["orchard"] }
 zcash_protocol = "0.7"
 nonempty = "0.11"
