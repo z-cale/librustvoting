@@ -1,65 +1,8 @@
-# Log files
-*.log
-.claude/**
-artifacts/
+/target
+Cargo.lock
 
-# Go binary
-sdk/svoted
-sdk/create-val-tx
-
-# Go build cache (used in CI; keep local cache out of git)
-sdk/.cache/
-
-# Debug chain data (launch.json uses this to avoid replay errors)
-.svoted-debug/
-
-# Rust build artifacts
-**/target/
-
-# Node
-node_modules/
-
-# UI build artifacts
-shielded_vote_generator_ui/dist/
-shielded_vote_generator_ui/.vite/
-
-__debug**
-
-# Obsidian vault symlink (old name)
-zcaloooors
-
-# Obsidian vault symlink (protocol spec)
-shielded_vote_book
-
-# Orchard book ZKP docs (symlinked from Obsidian)
-orchard/book/src/zkps/zkp1-delegation-proof.md
-orchard/book/src/zkps/zkp2-vote-proof.md
-orchard/book/src/zkps/zkp3-vote-reveal-proof.md
-
-# Environment files (secrets)
-.env
-**/.env
-.secrets
-
-**/vendor/**
-
-# Swift build artifacts
-keystone-qr/.build/
-
-# xcframework (regenerated via `cd zcash-voting-ffi && make dev`)
-zcash-voting-ffi/releases/zcash_voting_ffiFFI.xcframework/
-
-# Nullifier service data (lives in vote-nullifier-pir repo)
-nullifiers.bin
-nullifiers.checkpoint
-nullifiers.tree
-nullifiers.index
-
-# Downloaded/generated E2E throughput fixtures
-e2e-tests/fixtures/**/manifest.json
-e2e-tests/fixtures/**/delegations.json
-e2e-tests/fixtures/**/cast_vote_inputs.json
-
-# macOS
-.DS_Store
-.vercel
+# zcash-voting-ffi build artifacts
+zcash-voting-ffi/target
+zcash-voting-ffi/products
+zcash-voting-ffi/releases
+zcash-voting-ffi/Sources

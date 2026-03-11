@@ -1,115 +1,47 @@
-# Shielded Vote
+# librustvoting
 
-Monorepo for the Zcash shielded voting system. Contains the vote chain (Cosmos SDK), ZK circuits (Halo2 + RedPallas), nullifier ingestion service, admin UI, iOS wallet integration, and end-to-end tests.
+Client-side cryptographic library for Zcash shielded voting. Implements proof generation, vote construction, and tree synchronization for the [Zally governance protocol](https://github.com/valargroup/shielded-vote-book).
 
-## Infrastructure Setup
+## Workspace Crates
 
-| Guide                                                    | Purpose                                                                                                          |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| [BOOTSTRAP.md](docs/BOOTSTRAP.md)                             | End-to-end playbook for standing up a new network from scratch (infra, genesis, nullifiers, onboarding, release) |
-| [SETUP_GENESIS.md](docs/SETUP_GENESIS.md)                     | Bootstrap the genesis validator — build the binary, initialise the chain, open P2P, and register in Edge Config  |
-| [SETUP_JOIN.md](docs/SETUP_JOIN.md)                           | Join as a validator — self-registration, funding, and automatic on-chain registration via `join.sh`              |
-| [SETUP_NULLIFIER_SERVICE.md](docs/SETUP_NULLIFIER_SERVICE.md) | Set up the nullifier service — install deps, bootstrap the snapshot, and start the exclusion proof query server  |
+| Crate | Description |
+|-------|-------------|
+| **librustvoting** | Core library: ZKP delegation and vote proofs (Halo2), El Gamal encryption, governance PCZT construction, Merkle witness generation, SQLite round-state persistence |
+| **vote-commitment-tree** | Append-only Poseidon Merkle tree for Vote Authority Notes and Vote Commitments |
+| **vote-commitment-tree-client** | HTTP client and CLI for syncing the vote commitment tree from a chain node |
 
 ## Architecture
 
-| Component                     | Language           | Description                                                                                             |
-| ----------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
-| `sdk/`                        | Go + Rust (CGo)    | Cosmos SDK chain (`svoted`) with vote module, ante handlers, and ZK verification                        |
-| `vote-nullifier-pir` (external) | Rust             | Ingests Orchard nullifiers and serves PIR exclusion proofs ([repo](https://github.com/valargroup/vote-nullifier-pir)) |
-| `shielded_vote_generator_ui/` | TypeScript / React | UI for constructing and submitting shielded votes                                                       |
-| `zcash-voting-ffi/`           | Rust + Swift       | iOS FFI bindings for the voting circuits                                                                |
-| `e2e-tests/`                  | Rust               | End-to-end API tests against a running chain                                                            |
-
-## Prerequisites
-
-Install [mise](https://mise.jdx.dev) and a C compiler:
-
-```sh
-curl https://mise.run | sh       # install mise
-xcode-select --install           # macOS — or: apt install build-essential (Linux)
+```
+librustvoting
+├── vote-commitment-tree ──── imt-tree (vote-nullifier-pir)
+├── vote-commitment-tree-client
+├── pir-client (vote-nullifier-pir)
+├── voting-circuits ── ZK delegation + vote proofs, orchard fork
+└── librustzcash ───── pczt, zcash_keys, zcash_client_sqlite, ...
 ```
 
-Optionally, activate mise in your shell so tools are available automatically when you `cd` into the project:
+## Building
 
-```sh
-echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
-mise settings set autoinstall true
+```bash
+cargo check                    # check all crates
+cargo build -p librustvoting   # build just the core library
 ```
 
-Without shell activation, use `mise install` to install tools and `mise run <task>` to run commands.
+The workspace depends on the private [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits) repo. The `.cargo/config.toml` enables `git-fetch-with-cli` so your local git credentials are used automatically.
 
-Go, Rust, and Node are pinned in `mise.toml`. Submodules that need specific Rust versions (e.g. librustzcash: 1.85.1) use `rust-toolchain.toml` — mise/rustup switches automatically.
+## Dependency Strategy
 
-## Setup
+This workspace uses `[patch.crates-io]` (in the root `Cargo.toml`) to override two dependency trees:
 
-```sh
-cd shielded-vote
-mise trust      # one-time: allow mise to run this project's config
-mise start      # init chain, bootstrap nullifiers, start everything
-```
+- **orchard 0.11** — Resolved from [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits), which bundles an orchard fork with public visibility for `constants`, `spec`, and a `shared_primitives::spend_authority` gadget.
 
-This builds the chain binary (with Halo2 + RedPallas ZK verification), initialises a single-validator chain, fetches Orchard nullifiers, and starts the chain node and nullifier query server in the background.
+- **librustzcash crates** (pczt, zcash_keys, zcash_client_sqlite, etc.) — Resolved from [valargroup/librustzcash](https://github.com/valargroup/librustzcash) branch `valargroup/pczt-governance-extensions-0.11`. Adds public getters and methods needed for governance PCZT construction and Merkle witness generation.
 
-If services are already running, `mise start` will report them and exit cleanly.
+## FFI
 
-```sh
-mise status     # check service health and voting round state
-mise stop       # stop all services
-mise ui         # start admin UI dev server (port 5173)
-mise test       # end-to-end tests against running chain
-```
+Mobile FFI bindings live in [zcash-swift-wallet-sdk](https://github.com/valargroup/zcash-swift-wallet-sdk) (hand-rolled C FFI + Swift wrappers). This repo is a pure Rust workspace.
 
-Run `mise tasks` for the full list. Key namespaces: `build:*`, `chain:*`, `multi:*`, `nullifier:*`, `test:*`.
+## License
 
-<!-- mise-tasks -->
-
-| Task | Description |
-|---|---|
-| **Daily** | |
-| `start` | Init chain + bootstrap nullifiers + start everything |
-| `stop` | Stop all services |
-| `status` | Show service health + voting round state |
-| `ui` | Start admin UI dev server (port 5173) |
-| `test` | E2E tests against running chain |
-| **build:\*** | |
-| `build` | Build svoted with FFI (Halo2 + RedPallas) |
-| `build:quick` | Build svoted without FFI (Go only) |
-| `build:install` | Install svoted with FFI to $GOBIN |
-| `build:circuits` | Build Rust circuit static library |
-| `build:ui` | Build admin UI for production |
-| **chain:\*** | |
-| `chain:init` | Wipe and reinitialize a single-validator chain |
-| `chain:start` | Start chain daemon (foreground) |
-| `chain:clean` | Remove chain data directory |
-| `chain:ceremony` | Register Pallas key + create round + wait ACTIVE |
-| **multi:\*** | |
-| `multi:init` | Build + init 3-validator chain (no start) |
-| `multi:start` | Init + nullifiers + PIR + start 3-validator chain |
-| `multi:stop` | Stop all multi-validator processes |
-| `multi:status` | Show running status of all 3 validators |
-| `multi:clean` | Stop + remove all multi-validator data |
-| **nullifier:\*** | |
-| `nullifier:bootstrap` | Download nullifier snapshot from DO Spaces |
-| `nullifier:ingest` | Sync nullifiers to SYNC_HEIGHT or chain tip |
-| `nullifier:export` | Build PIR tree and export tier files |
-| `nullifier:serve` | Start PIR server (port 3000) |
-| `nullifier:status` | Show nullifier ingestion progress |
-| `nullifier:clean` | Remove nullifier data + build artifacts |
-| **test:\*** | |
-| `test:unit` | Go unit tests (keeper, validation, codec) |
-| `test:integration` | Go ABCI pipeline integration tests |
-| `test:helper` | Helper server unit tests (SQLite, API, processor) |
-| `test:go` | All Go tests (unit + integration + helper) |
-| `test:circuits` | Rust circuit unit tests |
-| `test:ffi` | All FFI-backed tests (Halo2 + RedPallas) |
-| `test:nullifier` | Nullifier crate unit tests |
-| `test:proof` | Verify exclusion proofs against ingested data |
-| **Other** | |
-| `validator:join` | Build from source and join network as validator |
-| `fmt` | Format Go code |
-| `lint` | Run Go vet |
-| `fixtures` | Regenerate all fixture files |
-| `proto` | Regenerate protobuf code |
-
-<!-- /mise-tasks -->
+TODO
