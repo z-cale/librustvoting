@@ -6,6 +6,22 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v3.1.1
+
+### Changed
+
+- Updated the 3.x release dependency stack to `voting-crypto-deps 0.2.3`,
+  `voting-circuits 0.11.3`, `imt-tree 0.5.3`, `pir-types 0.6.3`, and
+  `pir-client 0.7.3`, together with the compatible
+  `zakura-wallet-lib 0.1.0-rc5` stack. The `voting-circuits` patch changes only
+  its Zakura dependency family; the voting circuits and their proving and
+  verifying keys are unchanged.
+- Removed the exact `zakura-wallet-lib` pin so compatible release-candidate
+  updates can resolve without another SDK release.
+- Prepared `vote-commitment-tree 0.6.1` and
+  `vote-commitment-tree-client 0.8.1` with the updated exact internal pins;
+  publish them in that order before `zcash_voting 3.1.1`.
+
 ## v3.1.0
 
 ### Changed
